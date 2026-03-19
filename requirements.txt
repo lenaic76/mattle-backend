@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+motor
+python-jose
+argon2-cffi
+python-dotenv
+pydantic
