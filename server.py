@@ -1,10 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import asyncio
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional
@@ -12,11 +13,11 @@ import uuid
 from datetime import datetime, timedelta
 import random
 import math
-#from passlib.context import CryptContext
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from jose import JWTError, jwt
 import hashlib
+from duel import find_match, process_answer, active_matches, connections, waiting_queue
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -30,7 +31,6 @@ db = client[os.environ.get('DB_NAME', 'mattle_db')]
 SECRET_KEY = os.environ.get('SECRET_KEY', 'mattle-secret-key-2025')
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
-#pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ph = PasswordHasher()
 security = HTTPBearer(auto_error=False)
 
@@ -57,6 +57,7 @@ class UserResponse(BaseModel):
     username: str
     email: str
     elo: int
+    elo_online: int
     grade: int
     problems_solved: int
     correct_answers: int
@@ -85,6 +86,7 @@ class LeaderboardEntry(BaseModel):
     rank: int
     username: str
     elo: int
+    elo_online: int
     problems_solved: int
     accuracy: float
 
@@ -99,12 +101,6 @@ class UserStats(BaseModel):
 
 # ==================== HELPERS ====================
 
-#def hash_password(password: str) -> str:
-    #return pwd_context.hash(password)
-
-#def verify_password(plain: str, hashed: str) -> bool:
-    #return pwd_context.verify(plain, hashed)
-
 def hash_password(password: str) -> str:
     return ph.hash(password)
 
@@ -113,7 +109,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         return ph.verify(hashed, plain)
     except VerifyMismatchError:
         return False
-        
+
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
@@ -313,6 +309,7 @@ async def register(user_data: UserCreate):
         "email": user_data.email,
         "password_hash": hash_password(user_data.password),
         "elo": 1000,
+        "elo_online": 1000,
         "grade": user_data.grade,
         "problems_solved": 0,
         "correct_answers": 0,
@@ -333,7 +330,7 @@ async def register(user_data: UserCreate):
         access_token=token,
         user=UserResponse(
             id=user_id, username=user_data.username, email=user_data.email,
-            elo=1000, grade=user_data.grade, problems_solved=0,
+            elo=1000, elo_online=1000, grade=user_data.grade, problems_solved=0,
             correct_answers=0, streak_days=0, last_daily_date=None,
             created_at=user["created_at"],
         )
@@ -349,8 +346,8 @@ async def login(credentials: UserLogin):
         access_token=token,
         user=UserResponse(
             id=user["id"], username=user["username"], email=user["email"],
-            elo=user["elo"], grade=user["grade"],
-            problems_solved=user["problems_solved"],
+            elo=user["elo"], elo_online=user.get("elo_online", 1000),
+            grade=user["grade"], problems_solved=user["problems_solved"],
             correct_answers=user["correct_answers"],
             streak_days=user["streak_days"],
             last_daily_date=user.get("last_daily_date"),
@@ -363,6 +360,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     return UserResponse(
         id=current_user["id"], username=current_user["username"],
         email=current_user["email"], elo=current_user["elo"],
+        elo_online=current_user.get("elo_online", 1000),
         grade=current_user["grade"], problems_solved=current_user["problems_solved"],
         correct_answers=current_user["correct_answers"],
         streak_days=current_user["streak_days"],
@@ -548,14 +546,17 @@ async def submit_daily_answer(
 
 @api_router.get("/leaderboard", response_model=List[LeaderboardEntry])
 async def get_leaderboard(limit: int = 50):
-    users = await db.users.find().sort("elo", -1).limit(limit).to_list(limit)
+    users = await db.users.find().sort("elo_online", -1).limit(limit).to_list(limit)
     leaderboard = []
     for rank, user in enumerate(users, 1):
         accuracy = (user["correct_answers"] / user["problems_solved"] * 100) \
             if user["problems_solved"] > 0 else 0
         leaderboard.append(LeaderboardEntry(
-            rank=rank, username=user["username"], elo=user["elo"],
-            problems_solved=user["problems_solved"], accuracy=round(accuracy, 1),
+            rank=rank, username=user["username"],
+            elo=user["elo"],
+            elo_online=user.get("elo_online", 1000),
+            problems_solved=user["problems_solved"],
+            accuracy=round(accuracy, 1),
         ))
     return leaderboard
 
@@ -576,7 +577,7 @@ async def get_my_stats(current_user: dict = Depends(get_current_user)):
 
 @api_router.get("/stats/rank")
 async def get_my_rank(current_user: dict = Depends(get_current_user)):
-    higher_count = await db.users.count_documents({"elo": {"$gt": current_user["elo"]}})
+    higher_count = await db.users.count_documents({"elo_online": {"$gt": current_user.get("elo_online", 1000)}})
     total_users = await db.users.count_documents({})
     return {
         "rank": higher_count + 1,
@@ -591,6 +592,61 @@ async def root():
 @api_router.get("/health")
 async def health():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+# ==================== WEBSOCKET DUEL ====================
+
+@app.websocket("/ws/duel/{user_id}")
+async def duel_websocket(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    connections[user_id] = websocket
+    import json
+    try:
+        data = await websocket.receive_text()
+        player_data = json.loads(data)
+        username = player_data.get("username")
+        elo_online = player_data.get("elo_online", 1000)
+
+        asyncio.create_task(
+            find_match(user_id, username, elo_online, websocket, db)
+        )
+
+        while True:
+            message = await websocket.receive_text()
+            msg_data = json.loads(message)
+
+            if msg_data.get("type") == "answer":
+                match_id = msg_data.get("match_id")
+                answer = float(msg_data.get("answer", 0))
+                if match_id in active_matches:
+                    match = active_matches[match_id]
+                    if match.get("status") == "finished":
+                        elo_change_key = f"elo_change_{user_id}"
+                        if elo_change_key in match:
+                            elo_change = match[elo_change_key]
+                            user = await db.users.find_one({"id": user_id})
+                            if user:
+                                new_elo_online = max(100, user.get("elo_online", 1000) + elo_change)
+                                await db.users.update_one(
+                                    {"id": user_id},
+                                    {"$set": {"elo_online": new_elo_online}}
+                                )
+                    else:
+                        await process_answer(match_id, user_id, answer)
+
+            elif msg_data.get("type") == "cancel_search":
+                if user_id in waiting_queue:
+                    waiting_queue.pop(user_id)
+                    await websocket.send_text(json.dumps({"type": "search_cancelled"}))
+
+    except WebSocketDisconnect:
+        if user_id in connections:
+            connections.pop(user_id)
+        if user_id in waiting_queue:
+            waiting_queue.pop(user_id)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        if user_id in connections:
+            connections.pop(user_id)
 
 app.include_router(api_router)
 app.add_middleware(
