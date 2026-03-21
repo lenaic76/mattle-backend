@@ -23,12 +23,10 @@ from teacher import generate_class_code, execute_teacher_code, TEACHER_CODE_TEMP
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'mattle_db')]
 
-# Sécurité
 SECRET_KEY = os.environ.get('SECRET_KEY', 'mattle-secret-key-2025')
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
@@ -142,6 +140,12 @@ def calculate_elo_change(user_elo: int, problem_elo: int, correct: bool) -> int:
 
 def get_today_date() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
+
+def clean_doc(doc: dict) -> dict:
+    """Supprime le _id MongoDB non sérialisable"""
+    if doc:
+        doc.pop("_id", None)
+    return doc
 
 # ==================== GENERATEURS ====================
 
@@ -622,6 +626,7 @@ async def create_class(
         "created_at": datetime.utcnow(),
     }
     await db.classes.insert_one(new_class)
+    clean_doc(new_class)
     return {"class": new_class}
 
 @api_router.get("/teacher/classes")
@@ -631,6 +636,8 @@ async def get_teacher_classes(current_user: dict = Depends(get_current_user)):
     classes = await db.classes.find(
         {"teacher_id": current_user["id"]}
     ).to_list(100)
+    for c in classes:
+        clean_doc(c)
     return {"classes": classes}
 
 @api_router.get("/teacher/classes/{class_id}")
@@ -643,6 +650,7 @@ async def get_class(
         raise HTTPException(status_code=404, detail="Classe non trouvée")
     if class_doc["teacher_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
+    clean_doc(class_doc)
     students_info = []
     for student_id in class_doc.get("students", []):
         student = await db.users.find_one({"id": student_id})
@@ -730,6 +738,7 @@ async def create_exercise(
         "results": [],
     }
     await db.exercises.insert_one(exercise)
+    clean_doc(exercise)
     await db.classes.update_one(
         {"id": class_id},
         {"$push": {"exercises": exercise_id}}
@@ -745,6 +754,8 @@ async def get_class_exercises(
     if not class_doc:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
     exercises = await db.exercises.find({"class_id": class_id}).to_list(100)
+    for ex in exercises:
+        clean_doc(ex)
     return {"exercises": exercises}
 
 @api_router.delete("/teacher/exercises/{exercise_id}")
@@ -942,6 +953,7 @@ async def get_exercise(
     exercise = await db.exercises.find_one({"id": exercise_id})
     if not exercise:
         raise HTTPException(status_code=404, detail="Exercice non trouvé")
+    clean_doc(exercise)
     return {"exercise": exercise}
 
 @api_router.post("/student/exercises/{exercise_id}/submit")
