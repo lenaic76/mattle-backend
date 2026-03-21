@@ -18,6 +18,7 @@ from argon2.exceptions import VerifyMismatchError
 from jose import JWTError, jwt
 import hashlib
 from duel import find_match, process_answer, active_matches, connections, waiting_queue
+from teacher import generate_class_code, execute_teacher_code, TEACHER_CODE_TEMPLATE
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -47,6 +48,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     grade: int = 6
+    role: str = "student"
 
 class UserLogin(BaseModel):
     email: str
@@ -59,6 +61,7 @@ class UserResponse(BaseModel):
     elo: int
     elo_online: int
     grade: int
+    role: str
     problems_solved: int
     correct_answers: int
     streak_days: int
@@ -153,18 +156,15 @@ def generate_calcul_problem(difficulty: int) -> dict:
             if a < b: a, b = b, a
             return {"question": f"{a} - {b} = ?", "answer": float(a - b),
                     "explanation": f"La réponse est {a - b}", "hint": "Calcule étape par étape"}
-    
     elif difficulty == 2:
         a, b = random.randint(2, 12), random.randint(2, 12)
         return {"question": f"{a} × {b} = ?", "answer": float(a * b),
                 "explanation": f"La réponse est {a * b}", "hint": "Table de multiplication"}
-    
     elif difficulty == 3:
         a = random.randint(2, 12)
         b = random.randint(2, 10)
         return {"question": f"{a * b} ÷ {a} = ?", "answer": float(b),
                 "explanation": f"La réponse est {b}", "hint": "Division"}
-    
     elif difficulty == 4:
         n1, d1 = random.randint(1, 5), random.randint(2, 6)
         n2, d2 = random.randint(1, 5), random.randint(2, 6)
@@ -172,7 +172,6 @@ def generate_calcul_problem(difficulty: int) -> dict:
         return {"question": f"{n1}/{d1} + {n2}/{d2} = ? (arrondi à 0.01)",
                 "answer": answer, "explanation": f"La réponse est {answer}",
                 "hint": "Trouve le dénominateur commun"}
-    
     else:
         base = random.randint(2, 10)
         exp = random.randint(2, 3)
@@ -311,6 +310,7 @@ async def register(user_data: UserCreate):
         "elo": 1000,
         "elo_online": 1000,
         "grade": user_data.grade,
+        "role": user_data.role,
         "problems_solved": 0,
         "correct_answers": 0,
         "streak_days": 0,
@@ -330,7 +330,8 @@ async def register(user_data: UserCreate):
         access_token=token,
         user=UserResponse(
             id=user_id, username=user_data.username, email=user_data.email,
-            elo=1000, elo_online=1000, grade=user_data.grade, problems_solved=0,
+            elo=1000, elo_online=1000, grade=user_data.grade,
+            role=user_data.role, problems_solved=0,
             correct_answers=0, streak_days=0, last_daily_date=None,
             created_at=user["created_at"],
         )
@@ -347,7 +348,8 @@ async def login(credentials: UserLogin):
         user=UserResponse(
             id=user["id"], username=user["username"], email=user["email"],
             elo=user["elo"], elo_online=user.get("elo_online", 1000),
-            grade=user["grade"], problems_solved=user["problems_solved"],
+            grade=user["grade"], role=user.get("role", "student"),
+            problems_solved=user["problems_solved"],
             correct_answers=user["correct_answers"],
             streak_days=user["streak_days"],
             last_daily_date=user.get("last_daily_date"),
@@ -361,7 +363,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         id=current_user["id"], username=current_user["username"],
         email=current_user["email"], elo=current_user["elo"],
         elo_online=current_user.get("elo_online", 1000),
-        grade=current_user["grade"], problems_solved=current_user["problems_solved"],
+        grade=current_user["grade"], role=current_user.get("role", "student"),
+        problems_solved=current_user["problems_solved"],
         correct_answers=current_user["correct_answers"],
         streak_days=current_user["streak_days"],
         last_daily_date=current_user.get("last_daily_date"),
@@ -546,7 +549,7 @@ async def submit_daily_answer(
 
 @api_router.get("/leaderboard", response_model=List[LeaderboardEntry])
 async def get_leaderboard(limit: int = 50):
-    users = await db.users.find().sort("elo_online", -1).limit(limit).to_list(limit)
+    users = await db.users.find({"role": "student"}).sort("elo_online", -1).limit(limit).to_list(limit)
     leaderboard = []
     for rank, user in enumerate(users, 1):
         accuracy = (user["correct_answers"] / user["problems_solved"] * 100) \
@@ -577,8 +580,11 @@ async def get_my_stats(current_user: dict = Depends(get_current_user)):
 
 @api_router.get("/stats/rank")
 async def get_my_rank(current_user: dict = Depends(get_current_user)):
-    higher_count = await db.users.count_documents({"elo_online": {"$gt": current_user.get("elo_online", 1000)}})
-    total_users = await db.users.count_documents({})
+    higher_count = await db.users.count_documents({
+        "elo_online": {"$gt": current_user.get("elo_online", 1000)},
+        "role": "student"
+    })
+    total_users = await db.users.count_documents({"role": "student"})
     return {
         "rank": higher_count + 1,
         "total_users": total_users,
@@ -593,6 +599,403 @@ async def root():
 async def health():
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+# ==================== TEACHER ROUTES ====================
+
+@api_router.post("/teacher/classes")
+async def create_class(
+    class_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    class_id = str(uuid.uuid4())
+    code = generate_class_code()
+    new_class = {
+        "id": class_id,
+        "name": class_data.get("name", "Ma classe"),
+        "subject": class_data.get("subject", "Maths"),
+        "teacher_id": current_user["id"],
+        "teacher_name": current_user["username"],
+        "code": code,
+        "students": [],
+        "exercises": [],
+        "created_at": datetime.utcnow(),
+    }
+    await db.classes.insert_one(new_class)
+    return {"class": new_class}
+
+@api_router.get("/teacher/classes")
+async def get_teacher_classes(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    classes = await db.classes.find(
+        {"teacher_id": current_user["id"]}
+    ).to_list(100)
+    return {"classes": classes}
+
+@api_router.get("/teacher/classes/{class_id}")
+async def get_class(
+    class_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+    if class_doc["teacher_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    students_info = []
+    for student_id in class_doc.get("students", []):
+        student = await db.users.find_one({"id": student_id})
+        if student:
+            students_info.append({
+                "id": student["id"],
+                "username": student["username"],
+                "grade": student["grade"],
+            })
+    return {
+        "class": class_doc,
+        "students": students_info,
+    }
+
+@api_router.delete("/teacher/classes/{class_id}")
+async def delete_class(
+    class_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+    if class_doc["teacher_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    await db.classes.delete_one({"id": class_id})
+    await db.exercises.delete_many({"class_id": class_id})
+    await db.class_results.delete_many({"class_id": class_id})
+    return {"message": "Classe supprimée"}
+
+@api_router.post("/teacher/classes/{class_id}/exercises")
+async def create_exercise(
+    class_id: str,
+    exercise_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc or class_doc["teacher_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    exercise_type = exercise_data.get("type", "auto")
+    questions = []
+    if exercise_type == "auto":
+        category = exercise_data.get("category", "calcul")
+        difficulty = exercise_data.get("difficulty", 2)
+        count = exercise_data.get("count", 10)
+        for _ in range(count):
+            prob = generate_problem(category, difficulty)
+            questions.append({
+                "id": prob["id"],
+                "question": prob["question"],
+                "answer": prob["answer"],
+                "hint": prob.get("hint", ""),
+                "explanation": prob["explanation"],
+            })
+    elif exercise_type == "python":
+        code = exercise_data.get("code", "")
+        result = execute_teacher_code(code)
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Erreur dans votre code: {result.get('error')}"
+            )
+        for q in result.get("questions", []):
+            q["id"] = str(uuid.uuid4())
+            questions.append(q)
+    elif exercise_type == "manual":
+        for q in exercise_data.get("questions", []):
+            q["id"] = str(uuid.uuid4())
+            questions.append(q)
+    exercise_id = str(uuid.uuid4())
+    exercise = {
+        "id": exercise_id,
+        "class_id": class_id,
+        "teacher_id": current_user["id"],
+        "title": exercise_data.get("title", "Exercice sans titre"),
+        "description": exercise_data.get("description", ""),
+        "type": exercise_type,
+        "questions": questions,
+        "code": exercise_data.get("code", "") if exercise_type == "python" else "",
+        "active": True,
+        "created_at": datetime.utcnow(),
+        "results": [],
+    }
+    await db.exercises.insert_one(exercise)
+    await db.classes.update_one(
+        {"id": class_id},
+        {"$push": {"exercises": exercise_id}}
+    )
+    return {"exercise": exercise}
+
+@api_router.get("/teacher/classes/{class_id}/exercises")
+async def get_class_exercises(
+    class_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+    exercises = await db.exercises.find({"class_id": class_id}).to_list(100)
+    return {"exercises": exercises}
+
+@api_router.delete("/teacher/exercises/{exercise_id}")
+async def delete_exercise(
+    exercise_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    exercise = await db.exercises.find_one({"id": exercise_id})
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercice non trouvé")
+    if exercise["teacher_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    await db.exercises.delete_one({"id": exercise_id})
+    await db.class_results.delete_many({"exercise_id": exercise_id})
+    return {"message": "Exercice supprimé"}
+
+@api_router.get("/teacher/code-template")
+async def get_code_template(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    return {"template": TEACHER_CODE_TEMPLATE}
+
+@api_router.post("/teacher/test-code")
+async def test_teacher_code(
+    code_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    result = execute_teacher_code(code_data.get("code", ""))
+    return result
+
+@api_router.get("/teacher/classes/{class_id}/stats")
+async def get_class_stats(
+    class_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc or class_doc["teacher_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Accès non autorisé")
+    results = await db.class_results.find({"class_id": class_id}).to_list(10000)
+    student_stats = {}
+    for r in results:
+        sid = r["student_id"]
+        if sid not in student_stats:
+            student_stats[sid] = {
+                "student_id": sid,
+                "username": r.get("username", "Inconnu"),
+                "total": 0, "correct": 0,
+                "exercises_done": set(),
+                "history": [],
+            }
+        student_stats[sid]["total"] += 1
+        if r.get("correct"):
+            student_stats[sid]["correct"] += 1
+        student_stats[sid]["exercises_done"].add(r.get("exercise_id"))
+        student_stats[sid]["history"].append({
+            "date": r.get("date"),
+            "correct": r.get("correct"),
+            "exercise_id": r.get("exercise_id"),
+        })
+    students_list = []
+    for sid, stats in student_stats.items():
+        accuracy = round(
+            (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1
+        )
+        students_list.append({
+            "student_id": sid,
+            "username": stats["username"],
+            "total_answers": stats["total"],
+            "correct_answers": stats["correct"],
+            "accuracy": accuracy,
+            "exercises_done": len(stats["exercises_done"]),
+            "history": sorted(stats["history"], key=lambda x: x.get("date", "")),
+        })
+    students_list.sort(key=lambda x: x["accuracy"], reverse=True)
+    exercise_stats = {}
+    for r in results:
+        eid = r.get("exercise_id")
+        if eid not in exercise_stats:
+            exercise_stats[eid] = {
+                "exercise_id": eid,
+                "title": r.get("exercise_title", "Exercice"),
+                "total": 0, "correct": 0,
+                "students_attempted": set(),
+            }
+        exercise_stats[eid]["total"] += 1
+        if r.get("correct"):
+            exercise_stats[eid]["correct"] += 1
+        exercise_stats[eid]["students_attempted"].add(r.get("student_id"))
+    exercises_list = []
+    for eid, stats in exercise_stats.items():
+        accuracy = round(
+            (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1
+        )
+        exercises_list.append({
+            "exercise_id": eid,
+            "title": stats["title"],
+            "total_answers": stats["total"],
+            "correct_answers": stats["correct"],
+            "accuracy": accuracy,
+            "students_attempted": len(stats["students_attempted"]),
+        })
+    return {
+        "class_name": class_doc["name"],
+        "total_students": len(class_doc.get("students", [])),
+        "students_stats": students_list,
+        "exercises_stats": exercises_list,
+    }
+
+# ==================== STUDENT ROUTES ====================
+
+@api_router.post("/student/join-class")
+async def join_class(
+    join_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    code = join_data.get("code", "").upper().strip()
+    class_doc = await db.classes.find_one({"code": code})
+    if not class_doc:
+        raise HTTPException(status_code=404, detail="Code de classe invalide")
+    student_id = current_user["id"]
+    if student_id in class_doc.get("students", []):
+        raise HTTPException(status_code=400, detail="Tu es déjà dans cette classe")
+    await db.classes.update_one(
+        {"id": class_doc["id"]},
+        {"$push": {"students": student_id}}
+    )
+    return {
+        "message": f"Tu as rejoint la classe {class_doc['name']}",
+        "class": {
+            "id": class_doc["id"],
+            "name": class_doc["name"],
+            "teacher_name": class_doc["teacher_name"],
+        }
+    }
+
+@api_router.get("/student/classes")
+async def get_student_classes(current_user: dict = Depends(get_current_user)):
+    classes = await db.classes.find({"students": current_user["id"]}).to_list(100)
+    result = []
+    for c in classes:
+        exercises = await db.exercises.find(
+            {"class_id": c["id"], "active": True}
+        ).to_list(100)
+        result.append({
+            "id": c["id"],
+            "name": c["name"],
+            "teacher_name": c["teacher_name"],
+            "exercises_count": len(exercises),
+        })
+    return {"classes": result}
+
+@api_router.get("/student/classes/{class_id}/exercises")
+async def get_student_exercises(
+    class_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    class_doc = await db.classes.find_one({"id": class_id})
+    if not class_doc:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+    if current_user["id"] not in class_doc.get("students", []):
+        raise HTTPException(status_code=403, detail="Tu n'es pas dans cette classe")
+    exercises = await db.exercises.find(
+        {"class_id": class_id, "active": True}
+    ).to_list(100)
+    result = []
+    for ex in exercises:
+        done = await db.class_results.find_one({
+            "exercise_id": ex["id"],
+            "student_id": current_user["id"],
+        })
+        result.append({
+            "id": ex["id"],
+            "title": ex["title"],
+            "description": ex["description"],
+            "questions_count": len(ex.get("questions", [])),
+            "already_done": done is not None,
+        })
+    return {
+        "class_name": class_doc["name"],
+        "teacher_name": class_doc["teacher_name"],
+        "exercises": result,
+    }
+
+@api_router.get("/student/exercises/{exercise_id}")
+async def get_exercise(
+    exercise_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    exercise = await db.exercises.find_one({"id": exercise_id})
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercice non trouvé")
+    return {"exercise": exercise}
+
+@api_router.post("/student/exercises/{exercise_id}/submit")
+async def submit_exercise_result(
+    exercise_id: str,
+    result_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    exercise = await db.exercises.find_one({"id": exercise_id})
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercice non trouvé")
+    answers = result_data.get("answers", [])
+    questions = exercise.get("questions", [])
+    results = []
+    correct_count = 0
+    for i, question in enumerate(questions):
+        if i < len(answers):
+            try:
+                student_answer = float(answers[i]) if answers[i] != "" else None
+            except (ValueError, TypeError):
+                student_answer = None
+            correct_answer = float(question["answer"])
+            is_correct = student_answer is not None and abs(student_answer - correct_answer) < 0.1
+            if is_correct:
+                correct_count += 1
+            results.append({
+                "question": question["question"],
+                "student_answer": student_answer,
+                "correct_answer": correct_answer,
+                "correct": is_correct,
+                "explanation": question.get("explanation", ""),
+            })
+            await db.class_results.insert_one({
+                "id": str(uuid.uuid4()),
+                "class_id": exercise["class_id"],
+                "exercise_id": exercise_id,
+                "exercise_title": exercise["title"],
+                "student_id": current_user["id"],
+                "username": current_user["username"],
+                "question_id": question.get("id", str(i)),
+                "student_answer": student_answer,
+                "correct_answer": correct_answer,
+                "correct": is_correct,
+                "date": get_today_date(),
+                "created_at": datetime.utcnow(),
+            })
+    accuracy = round((correct_count / len(questions) * 100) if questions else 0, 1)
+    return {
+        "results": results,
+        "correct_count": correct_count,
+        "total": len(questions),
+        "accuracy": accuracy,
+    }
+
 # ==================== WEBSOCKET DUEL ====================
 
 @app.websocket("/ws/duel/{user_id}")
@@ -605,15 +1008,12 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
         player_data = json.loads(data)
         username = player_data.get("username")
         elo_online = player_data.get("elo_online", 1000)
-
         asyncio.create_task(
             find_match(user_id, username, elo_online, websocket, db)
         )
-
         while True:
             message = await websocket.receive_text()
             msg_data = json.loads(message)
-
             if msg_data.get("type") == "answer":
                 match_id = msg_data.get("match_id")
                 answer = float(msg_data.get("answer", 0))
@@ -632,12 +1032,10 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
                                 )
                     else:
                         await process_answer(match_id, user_id, answer)
-
             elif msg_data.get("type") == "cancel_search":
                 if user_id in waiting_queue:
                     waiting_queue.pop(user_id)
                     await websocket.send_text(json.dumps({"type": "search_cancelled"}))
-
     except WebSocketDisconnect:
         if user_id in connections:
             connections.pop(user_id)
