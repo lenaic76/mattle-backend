@@ -76,6 +76,8 @@ class UserResponse(BaseModel):
     correct_answers: int
     streak_days: int
     last_daily_date: Optional[str] = None
+    clan_id: Optional[str] = None
+    clan_rank: Optional[str] = None
     created_at: datetime
 
 class TokenResponse(BaseModel):
@@ -359,18 +361,20 @@ async def login(credentials: UserLogin):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     token = create_access_token({"sub": user["id"]})
     return TokenResponse(
-        access_token=token,
-        user=UserResponse(
-            id=user["id"], username=user["username"], email=user["email"],
-            elo=user["elo"], elo_online=user.get("elo_online", 1000),
-            grade=user["grade"], role=user.get("role", "student"),
-            problems_solved=user["problems_solved"],
-            correct_answers=user["correct_answers"],
-            streak_days=user["streak_days"],
-            last_daily_date=user.get("last_daily_date"),
-            created_at=user["created_at"],
-        )
+    access_token=token,
+    user=UserResponse(
+        id=user["id"], username=user["username"], email=user["email"],
+        elo=user["elo"], elo_online=user.get("elo_online", 1000),
+        grade=user["grade"], role=user.get("role", "student"),
+        problems_solved=user["problems_solved"],
+        correct_answers=user["correct_answers"],
+        streak_days=user["streak_days"],
+        last_daily_date=user.get("last_daily_date"),
+        clan_id=user.get("clan_id"),
+        clan_rank=user.get("clan_rank"),
+        created_at=user["created_at"],
     )
+)
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -383,6 +387,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         correct_answers=current_user["correct_answers"],
         streak_days=current_user["streak_days"],
         last_daily_date=current_user.get("last_daily_date"),
+        clan_id=current_user.get("clan_id"),
+        clan_rank=current_user.get("clan_rank"),
         created_at=current_user["created_at"],
     )
 
