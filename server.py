@@ -392,6 +392,36 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         created_at=current_user["created_at"],
     )
 
+@api_router.put("/auth/profile")
+async def update_profile(
+    profile_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    update = {}
+    if "username" in profile_data:
+        username = profile_data["username"].strip()
+        if len(username) < 3 or len(username) > 20:
+            raise HTTPException(status_code=400, detail="Pseudo invalide (3-20 caractères)")
+        existing = await db.users.find_one({"username": username, "id": {"$ne": current_user["id"]}})
+        if existing:
+            raise HTTPException(status_code=400, detail="Ce pseudo est déjà pris")
+        update["username"] = username
+        # Met à jour le pseudo dans le clan aussi
+        if current_user.get("clan_id"):
+            await db.clans.update_one(
+                {"id": current_user["clan_id"], "members.id": current_user["id"]},
+                {"$set": {"members.$.username": username}}
+            )
+    if "grade" in profile_data:
+        grade = int(profile_data["grade"])
+        if grade not in [6, 7, 8, 9]:
+            raise HTTPException(status_code=400, detail="Niveau invalide")
+        update["grade"] = grade
+    if not update:
+        raise HTTPException(status_code=400, detail="Aucune modification")
+    await db.users.update_one({"id": current_user["id"]}, {"$set": update})
+    return {"message": "Profil mis à jour"}
+
 # ==================== PROBLEMS ====================
 
 @api_router.get("/problems/generate")
