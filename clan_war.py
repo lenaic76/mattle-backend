@@ -280,9 +280,12 @@ async def create_war(clan1_id: str, clan1_data: dict,
         }
 
     # Génère le buffer initial pour chaque paire
+    # Utilise le grade minimum des deux adversaires pour équité
     for pair in pairs:
         diff = pair["difficulty"]
-        buffer = [generate_war_problem(diff) for _ in range(PROBLEM_BUFFER_SIZE)]
+        min_grade = pair.get("min_grade", 6)
+        buffer = [generate_war_problem(diff, grade=min_grade)
+                for _ in range(PROBLEM_BUFFER_SIZE)]
         pair["shared_problem_ids"] = [p["id"] for p in buffer]
         pair["problem_buffer"] = buffer
         pair["buffer_index"] = 0
@@ -514,9 +517,9 @@ async def start_player_battle(war_id: str, user_id: str) -> dict | None:
     idx = pair.get("buffer_index", 0)
 
     if idx >= len(buffer):
-        # Génère plus de problèmes si nécessaire
-        new_problems = [generate_war_problem(pair["difficulty"])
-                       for _ in range(PROBLEM_BUFFER_SIZE)]
+        min_grade = pair.get("min_grade", 6)
+        new_problems = [generate_war_problem(pair["difficulty"], grade=min_grade)
+                    for _ in range(PROBLEM_BUFFER_SIZE)]
         pair["problem_buffer"].extend(new_problems)
         buffer = pair["problem_buffer"]
 
@@ -627,11 +630,11 @@ async def submit_war_answer(
 
     # Régénère le buffer si nécessaire
     if idx >= len(buffer) - 2:
-        new_problems = [generate_war_problem(pair["difficulty"])
-                       for _ in range(PROBLEM_BUFFER_SIZE)]
+        min_grade = pair.get("min_grade", 6)
+        new_problems = [generate_war_problem(pair["difficulty"], grade=min_grade)
+                    for _ in range(PROBLEM_BUFFER_SIZE)]
         pair["problem_buffer"].extend(new_problems)
         buffer = pair["problem_buffer"]
-
     next_problem = buffer[idx]
     pair["buffer_index"] = idx + 1
     scores[user_id]["current_problem"] = next_problem

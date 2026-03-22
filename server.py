@@ -28,6 +28,7 @@ from clan_war import (
     try_matchmaking, start_player_battle,
     submit_war_answer, end_war, send_war, broadcast_war
 )
+from problem_generators import get_problem_data
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -291,13 +292,9 @@ def get_daily_riddle(date_str: str) -> dict:
     riddle["elo_value"] = 1500
     return riddle
 
-def generate_problem(category: str, difficulty: int) -> dict:
-    if category == "calcul":
-        data = generate_calcul_problem(difficulty)
-    elif category == "algebre":
-        data = generate_algebre_problem(difficulty)
-    else:
-        data = generate_geometrie_problem(difficulty)
+def generate_problem(category: str, difficulty: int, grade: int = 6) -> dict:
+    """Génère un problème adapté à la catégorie, la difficulté ET le niveau scolaire"""
+    data = get_problem_data(category, difficulty, grade)
     return {
         "id": str(uuid.uuid4()),
         "category": category,
@@ -444,7 +441,7 @@ async def generate_problems(
     problems = []
     for i in range(min(count, 10)):
         diff = difficulties[i % len(difficulties)]
-        problems.append(generate_problem(category, diff))
+        problems.append(generate_problem(category, diff, current_user.get("grade", 6)))
     return {"problems": problems}
 
 @api_router.post("/problems/cache")
@@ -508,9 +505,10 @@ async def get_daily_challenge(current_user: dict = Depends(get_current_user)):
     daily_cache = await db.daily_challenges.find_one({"date": today})
     if not daily_cache:
         problems = []
+        grade = current_user.get("grade", 6)
         for cat in ["calcul", "algebre", "geometrie"]:
             for diff in [2, 3, 4]:
-                problems.append(generate_problem(cat, diff))
+                problems.append(generate_problem(cat, diff, grade))
         riddle = get_daily_riddle(today)
         daily_cache = {"date": today, "problems": problems, "riddle": riddle}
         await db.daily_challenges.insert_one(daily_cache)
@@ -736,7 +734,7 @@ async def create_exercise(
         difficulty = exercise_data.get("difficulty", 2)
         count = exercise_data.get("count", 10)
         for _ in range(count):
-            prob = generate_problem(category, difficulty)
+            prob = generate_problem(category, difficulty, class_doc.get("grade", 6))
             questions.append({
                 "id": prob["id"], "question": prob["question"],
                 "answer": prob["answer"], "hint": prob.get("hint", ""),
@@ -1184,9 +1182,17 @@ async def start_war(clan_id: str, war_data: dict, current_user: dict = Depends(g
     if len(selected_member_ids) != war_format:
         raise HTTPException(status_code=400, detail=f"Tu dois sélectionner exactement {war_format} membres")
     all_members = clan.get("members", [])
-    selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-    if len(selected_members) != war_format:
+    selected_members_base = [m for m in all_members if m["id"] in selected_member_ids]
+
+    if len(selected_members_base) != war_format:
         raise HTTPException(status_code=400, detail="Certains membres sont invalides")
+
+    # Enrichit chaque membre avec son grade depuis la base users
+    selected_members = []
+    for m in selected_members_base:
+        user_doc = await db.users.find_one({"id": m["id"]})
+        grade = user_doc.get("grade", 6) if user_doc else 6
+        selected_members.append({**m, "grade": grade})
     genius_index = clan.get("genius_index", 0)
     league = get_league(genius_index)
     WAR_QUEUE[clan_id] = {

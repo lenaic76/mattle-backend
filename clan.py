@@ -99,13 +99,21 @@ def match_members(clan1_members: list, clan2_members: list) -> list:
             used2.add(idx)
             avg_elo = (m1["elo_online"] + m2["elo_online"]) // 2
             difficulty = calculate_problem_difficulty(avg_elo)
+            # Grade minimum des deux adversaires pour que les questions soient équitables
+            grade1 = m1.get("grade", 6)
+            grade2 = m2.get("grade", 6)
+            min_grade = min(grade1, grade2)
+
             pairs.append({
                 "member1_id": m1["id"],
                 "member1_username": m1["username"],
                 "member1_elo": m1["elo_online"],
+                "member1_grade": grade1,
                 "member2_id": m2["id"],
                 "member2_username": m2["username"],
                 "member2_elo": m2["elo_online"],
+                "member2_grade": grade2,
+                "min_grade": min_grade,  # ← grade utilisé pour générer les problèmes
                 "difficulty": difficulty,
                 "shared_problem_ids": [],
             })
