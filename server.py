@@ -8,7 +8,7 @@ import logging
 import asyncio
 from pathlib import Path
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timedelta
 import random
@@ -47,6 +47,9 @@ api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Connexions WebSocket du chat de clan {clan_id: {user_id: websocket}}
+clan_chat_connections: Dict[str, Dict[str, object]] = {}
 
 # ==================== MODELS ====================
 
@@ -151,7 +154,6 @@ def get_today_date() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 def clean_doc(doc: dict) -> dict:
-    """Supprime le _id MongoDB non sérialisable"""
     if doc:
         doc.pop("_id", None)
     return doc
@@ -642,18 +644,13 @@ async def create_class(
 async def get_teacher_classes(current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
-    classes = await db.classes.find(
-        {"teacher_id": current_user["id"]}
-    ).to_list(100)
+    classes = await db.classes.find({"teacher_id": current_user["id"]}).to_list(100)
     for c in classes:
         clean_doc(c)
     return {"classes": classes}
 
 @api_router.get("/teacher/classes/{class_id}")
-async def get_class(
-    class_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_class(class_id: str, current_user: dict = Depends(get_current_user)):
     class_doc = await db.classes.find_one({"id": class_id})
     if not class_doc:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
@@ -669,16 +666,10 @@ async def get_class(
                 "username": student["username"],
                 "grade": student["grade"],
             })
-    return {
-        "class": class_doc,
-        "students": students_info,
-    }
+    return {"class": class_doc, "students": students_info}
 
 @api_router.delete("/teacher/classes/{class_id}")
-async def delete_class(
-    class_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def delete_class(class_id: str, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
     class_doc = await db.classes.find_one({"id": class_id})
@@ -711,20 +702,15 @@ async def create_exercise(
         for _ in range(count):
             prob = generate_problem(category, difficulty)
             questions.append({
-                "id": prob["id"],
-                "question": prob["question"],
-                "answer": prob["answer"],
-                "hint": prob.get("hint", ""),
+                "id": prob["id"], "question": prob["question"],
+                "answer": prob["answer"], "hint": prob.get("hint", ""),
                 "explanation": prob["explanation"],
             })
     elif exercise_type == "python":
         code = exercise_data.get("code", "")
         result = execute_teacher_code(code)
         if not result.get("success"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Erreur dans votre code: {result.get('error')}"
-            )
+            raise HTTPException(status_code=400, detail=f"Erreur dans votre code: {result.get('error')}")
         for q in result.get("questions", []):
             q["id"] = str(uuid.uuid4())
             questions.append(q)
@@ -734,31 +720,21 @@ async def create_exercise(
             questions.append(q)
     exercise_id = str(uuid.uuid4())
     exercise = {
-        "id": exercise_id,
-        "class_id": class_id,
+        "id": exercise_id, "class_id": class_id,
         "teacher_id": current_user["id"],
         "title": exercise_data.get("title", "Exercice sans titre"),
         "description": exercise_data.get("description", ""),
-        "type": exercise_type,
-        "questions": questions,
+        "type": exercise_type, "questions": questions,
         "code": exercise_data.get("code", "") if exercise_type == "python" else "",
-        "active": True,
-        "created_at": datetime.utcnow(),
-        "results": [],
+        "active": True, "created_at": datetime.utcnow(), "results": [],
     }
     await db.exercises.insert_one(exercise)
     clean_doc(exercise)
-    await db.classes.update_one(
-        {"id": class_id},
-        {"$push": {"exercises": exercise_id}}
-    )
+    await db.classes.update_one({"id": class_id}, {"$push": {"exercises": exercise_id}})
     return {"exercise": exercise}
 
 @api_router.get("/teacher/classes/{class_id}/exercises")
-async def get_class_exercises(
-    class_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_class_exercises(class_id: str, current_user: dict = Depends(get_current_user)):
     class_doc = await db.classes.find_one({"id": class_id})
     if not class_doc:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
@@ -768,10 +744,7 @@ async def get_class_exercises(
     return {"exercises": exercises}
 
 @api_router.delete("/teacher/exercises/{exercise_id}")
-async def delete_exercise(
-    exercise_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def delete_exercise(exercise_id: str, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
     exercise = await db.exercises.find_one({"id": exercise_id})
@@ -790,20 +763,13 @@ async def get_code_template(current_user: dict = Depends(get_current_user)):
     return {"template": TEACHER_CODE_TEMPLATE}
 
 @api_router.post("/teacher/test-code")
-async def test_teacher_code(
-    code_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
+async def test_teacher_code(code_data: dict, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
-    result = execute_teacher_code(code_data.get("code", ""))
-    return result
+    return execute_teacher_code(code_data.get("code", ""))
 
 @api_router.get("/teacher/classes/{class_id}/stats")
-async def get_class_stats(
-    class_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_class_stats(class_id: str, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "teacher":
         raise HTTPException(status_code=403, detail="Accès réservé aux professeurs")
     class_doc = await db.classes.find_one({"id": class_id})
@@ -815,13 +781,9 @@ async def get_class_stats(
         sid = r["student_id"]
         if sid not in student_stats:
             student_stats[sid] = {
-                "student_id": sid,
-                "username": r.get("username", "Inconnu"),
-                "total": 0,
-                "correct": 0,
-                "exercises_done": set(),
-                "total_time": 0,
-                "history": [],
+                "student_id": sid, "username": r.get("username", "Inconnu"),
+                "total": 0, "correct": 0, "exercises_done": set(),
+                "total_time": 0, "history": [],
             }
         student_stats[sid]["total"] += 1
         if r.get("correct"):
@@ -829,26 +791,18 @@ async def get_class_stats(
         student_stats[sid]["exercises_done"].add(r.get("exercise_id"))
         student_stats[sid]["total_time"] += r.get("time_spent", 0)
         student_stats[sid]["history"].append({
-            "date": r.get("date"),
-            "correct": r.get("correct"),
+            "date": r.get("date"), "correct": r.get("correct"),
             "exercise_id": r.get("exercise_id"),
         })
     students_list = []
     for sid, stats in student_stats.items():
-        accuracy = round(
-            (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1
-        )
+        accuracy = round((stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1)
         students_list.append({
-            "student_id": sid,
-            "username": stats["username"],
-            "total_answers": stats["total"],
-            "correct_answers": stats["correct"],
-            "accuracy": accuracy,
-            "exercises_done": len(stats["exercises_done"]),
+            "student_id": sid, "username": stats["username"],
+            "total_answers": stats["total"], "correct_answers": stats["correct"],
+            "accuracy": accuracy, "exercises_done": len(stats["exercises_done"]),
             "total_time_seconds": stats["total_time"],
-            "avg_time_per_question": round(
-                stats["total_time"] / stats["total"], 1
-            ) if stats["total"] > 0 else 0,
+            "avg_time_per_question": round(stats["total_time"] / stats["total"], 1) if stats["total"] > 0 else 0,
             "history": sorted(stats["history"], key=lambda x: x.get("date", "")),
         })
     students_list.sort(key=lambda x: x["accuracy"], reverse=True)
@@ -857,12 +811,8 @@ async def get_class_stats(
         eid = r.get("exercise_id")
         if eid not in exercise_stats:
             exercise_stats[eid] = {
-                "exercise_id": eid,
-                "title": r.get("exercise_title", "Exercice"),
-                "total": 0,
-                "correct": 0,
-                "total_time": 0,
-                "students_attempted": set(),
+                "exercise_id": eid, "title": r.get("exercise_title", "Exercice"),
+                "total": 0, "correct": 0, "total_time": 0, "students_attempted": set(),
             }
         exercise_stats[eid]["total"] += 1
         if r.get("correct"):
@@ -871,19 +821,12 @@ async def get_class_stats(
         exercise_stats[eid]["students_attempted"].add(r.get("student_id"))
     exercises_list = []
     for eid, stats in exercise_stats.items():
-        accuracy = round(
-            (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1
-        )
+        accuracy = round((stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1)
         exercises_list.append({
-            "exercise_id": eid,
-            "title": stats["title"],
-            "total_answers": stats["total"],
-            "correct_answers": stats["correct"],
-            "accuracy": accuracy,
-            "students_attempted": len(stats["students_attempted"]),
-            "avg_time_seconds": round(
-                stats["total_time"] / stats["total"], 1
-            ) if stats["total"] > 0 else 0,
+            "exercise_id": eid, "title": stats["title"],
+            "total_answers": stats["total"], "correct_answers": stats["correct"],
+            "accuracy": accuracy, "students_attempted": len(stats["students_attempted"]),
+            "avg_time_seconds": round(stats["total_time"] / stats["total"], 1) if stats["total"] > 0 else 0,
         })
     return {
         "class_name": class_doc["name"],
@@ -895,10 +838,7 @@ async def get_class_stats(
 # ==================== STUDENT ROUTES ====================
 
 @api_router.post("/student/join-class")
-async def join_class(
-    join_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
+async def join_class(join_data: dict, current_user: dict = Depends(get_current_user)):
     code = join_data.get("code", "").upper().strip()
     class_doc = await db.classes.find_one({"code": code})
     if not class_doc:
@@ -906,17 +846,10 @@ async def join_class(
     student_id = current_user["id"]
     if student_id in class_doc.get("students", []):
         raise HTTPException(status_code=400, detail="Tu es déjà dans cette classe")
-    await db.classes.update_one(
-        {"id": class_doc["id"]},
-        {"$push": {"students": student_id}}
-    )
+    await db.classes.update_one({"id": class_doc["id"]}, {"$push": {"students": student_id}})
     return {
         "message": f"Tu as rejoint la classe {class_doc['name']}",
-        "class": {
-            "id": class_doc["id"],
-            "name": class_doc["name"],
-            "teacher_name": class_doc["teacher_name"],
-        }
+        "class": {"id": class_doc["id"], "name": class_doc["name"], "teacher_name": class_doc["teacher_name"]},
     }
 
 @api_router.get("/student/classes")
@@ -924,54 +857,32 @@ async def get_student_classes(current_user: dict = Depends(get_current_user)):
     classes = await db.classes.find({"students": current_user["id"]}).to_list(100)
     result = []
     for c in classes:
-        exercises = await db.exercises.find(
-            {"class_id": c["id"], "active": True}
-        ).to_list(100)
+        exercises = await db.exercises.find({"class_id": c["id"], "active": True}).to_list(100)
         result.append({
-            "id": c["id"],
-            "name": c["name"],
-            "teacher_name": c["teacher_name"],
-            "exercises_count": len(exercises),
+            "id": c["id"], "name": c["name"],
+            "teacher_name": c["teacher_name"], "exercises_count": len(exercises),
         })
     return {"classes": result}
 
 @api_router.get("/student/classes/{class_id}/exercises")
-async def get_student_exercises(
-    class_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_student_exercises(class_id: str, current_user: dict = Depends(get_current_user)):
     class_doc = await db.classes.find_one({"id": class_id})
     if not class_doc:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
     if current_user["id"] not in class_doc.get("students", []):
         raise HTTPException(status_code=403, detail="Tu n'es pas dans cette classe")
-    exercises = await db.exercises.find(
-        {"class_id": class_id, "active": True}
-    ).to_list(100)
+    exercises = await db.exercises.find({"class_id": class_id, "active": True}).to_list(100)
     result = []
     for ex in exercises:
-        done = await db.class_results.find_one({
-            "exercise_id": ex["id"],
-            "student_id": current_user["id"],
-        })
+        done = await db.class_results.find_one({"exercise_id": ex["id"], "student_id": current_user["id"]})
         result.append({
-            "id": ex["id"],
-            "title": ex["title"],
-            "description": ex["description"],
-            "questions_count": len(ex.get("questions", [])),
-            "already_done": done is not None,
+            "id": ex["id"], "title": ex["title"], "description": ex["description"],
+            "questions_count": len(ex.get("questions", [])), "already_done": done is not None,
         })
-    return {
-        "class_name": class_doc["name"],
-        "teacher_name": class_doc["teacher_name"],
-        "exercises": result,
-    }
+    return {"class_name": class_doc["name"], "teacher_name": class_doc["teacher_name"], "exercises": result}
 
 @api_router.get("/student/exercises/{exercise_id}")
-async def get_exercise(
-    exercise_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_exercise(exercise_id: str, current_user: dict = Depends(get_current_user)):
     exercise = await db.exercises.find_one({"id": exercise_id})
     if not exercise:
         raise HTTPException(status_code=404, detail="Exercice non trouvé")
@@ -1005,97 +916,55 @@ async def submit_exercise_result(
             if is_correct:
                 correct_count += 1
             results.append({
-                "question": question["question"],
-                "student_answer": student_answer,
-                "correct_answer": correct_answer,
-                "correct": is_correct,
+                "question": question["question"], "student_answer": student_answer,
+                "correct_answer": correct_answer, "correct": is_correct,
                 "explanation": question.get("explanation", ""),
             })
             await db.class_results.insert_one({
-                "id": str(uuid.uuid4()),
-                "class_id": exercise["class_id"],
-                "exercise_id": exercise_id,
-                "exercise_title": exercise["title"],
-                "student_id": current_user["id"],
-                "username": current_user["username"],
+                "id": str(uuid.uuid4()), "class_id": exercise["class_id"],
+                "exercise_id": exercise_id, "exercise_title": exercise["title"],
+                "student_id": current_user["id"], "username": current_user["username"],
                 "question_id": question.get("id", str(i)),
-                "student_answer": student_answer,
-                "correct_answer": correct_answer,
-                "correct": is_correct,
-                "time_spent": time_per_question,
-                "date": get_today_date(),
-                "created_at": datetime.utcnow(),
+                "student_answer": student_answer, "correct_answer": correct_answer,
+                "correct": is_correct, "time_spent": time_per_question,
+                "date": get_today_date(), "created_at": datetime.utcnow(),
             })
     accuracy = round((correct_count / len(questions) * 100) if questions else 0, 1)
-    return {
-        "results": results,
-        "correct_count": correct_count,
-        "total": len(questions),
-        "accuracy": accuracy,
-        "time_spent": time_spent,
-    }
+    return {"results": results, "correct_count": correct_count, "total": len(questions), "accuracy": accuracy, "time_spent": time_spent}
 
 # ==================== CLAN ROUTES ====================
 
 @api_router.post("/clans")
-async def create_clan(
-    clan_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un nouveau clan"""
+async def create_clan(clan_data: dict, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") == "teacher":
         raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas créer de clan")
-
-    # Vérifie que l'utilisateur n'est pas déjà dans un clan
     existing = await db.clans.find_one({"members.id": current_user["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
     name = clan_data.get("name", "").strip()
     if not name or len(name) < 3 or len(name) > 20:
         raise HTTPException(status_code=400, detail="Le nom doit faire entre 3 et 20 caractères")
-
-    # Vérifie que le nom n'existe pas déjà
     if await db.clans.find_one({"name": name}):
         raise HTTPException(status_code=400, detail="Ce nom de clan est déjà pris")
-
     clan_id = str(uuid.uuid4())
     tag = generate_clan_tag()
     genius_index = 0
     league = get_league(genius_index)
-
     clan = {
-        "id": clan_id,
-        "name": name,
-        "tag": tag,
+        "id": clan_id, "name": name, "tag": tag,
         "description": clan_data.get("description", ""),
-        "genius_index": genius_index,
-        "league": league["name"],
-        "members": [{
-            "id": current_user["id"],
-            "username": current_user["username"],
-            "elo_online": current_user.get("elo_online", 1000),
-            "rank": "chef",
-        }],
-        "current_war_id": None,
-        "war_history": [],
-        "created_at": datetime.utcnow(),
+        "genius_index": genius_index, "league": league["name"],
+        "members": [{"id": current_user["id"], "username": current_user["username"],
+                     "elo_online": current_user.get("elo_online", 1000), "rank": "chef"}],
+        "current_war_id": None, "war_history": [], "created_at": datetime.utcnow(),
     }
-
     await db.clans.insert_one(clan)
     clean_doc(clan)
-
-    # Met à jour l'utilisateur
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "chef"}}
-    )
-
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"clan_id": clan_id, "clan_rank": "chef"}})
     return {"clan": clan}
 
 @api_router.get("/clans/my")
 async def get_my_clan(current_user: dict = Depends(get_current_user)):
-    """Récupère le clan de l'utilisateur"""
     clan_id = current_user.get("clan_id")
     if not clan_id:
         return {"clan": None}
@@ -1103,17 +972,13 @@ async def get_my_clan(current_user: dict = Depends(get_current_user)):
     if not clan:
         return {"clan": None}
     clean_doc(clan)
-
-    # Calcule l'Elo total du clan
     total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
     clan["total_elo"] = total_elo
     clan["league"] = get_league(clan.get("genius_index", 0))
-
     return {"clan": clan}
 
 @api_router.get("/clans/search")
 async def search_clans(q: str = "", limit: int = 20):
-    """Recherche des clans par nom"""
     query = {}
     if q:
         query["name"] = {"$regex": q, "$options": "i"}
@@ -1123,20 +988,16 @@ async def search_clans(q: str = "", limit: int = 20):
         clean_doc(clan)
         total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
         result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
+            "id": clan["id"], "name": clan["name"], "tag": clan["tag"],
             "description": clan.get("description", ""),
             "genius_index": clan.get("genius_index", 0),
             "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
+            "members_count": len(clan.get("members", [])), "total_elo": total_elo,
         })
     return {"clans": result}
 
 @api_router.get("/clans/{clan_id}")
 async def get_clan(clan_id: str):
-    """Récupère le détail d'un clan"""
     clan = await db.clans.find_one({"id": clan_id})
     if not clan:
         raise HTTPException(status_code=404, detail="Clan non trouvé")
@@ -1147,63 +1008,36 @@ async def get_clan(clan_id: str):
     return {"clan": clan}
 
 @api_router.post("/clans/{clan_id}/join")
-async def join_clan(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Rejoindre un clan"""
+async def join_clan(clan_id: str, current_user: dict = Depends(get_current_user)):
     if current_user.get("role") == "teacher":
         raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas rejoindre un clan")
-
     existing = await db.clans.find_one({"members.id": current_user["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
     clan = await db.clans.find_one({"id": clan_id})
     if not clan:
         raise HTTPException(status_code=404, detail="Clan non trouvé")
-
     if len(clan.get("members", [])) >= 40:
         raise HTTPException(status_code=400, detail="Le clan est complet (40/40)")
-
-    new_member = {
-        "id": current_user["id"],
-        "username": current_user["username"],
-        "elo_online": current_user.get("elo_online", 1000),
-        "rank": "recrue",
-    }
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$push": {"members": new_member}}
-    )
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}}
-    )
-
+    new_member = {"id": current_user["id"], "username": current_user["username"],
+                  "elo_online": current_user.get("elo_online", 1000), "rank": "recrue"}
+    await db.clans.update_one({"id": clan_id}, {"$push": {"members": new_member}})
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}})
     return {"message": f"Tu as rejoint le clan {clan['name']} !"}
 
 @api_router.post("/clans/leave")
 async def leave_clan(current_user: dict = Depends(get_current_user)):
-    """Quitter son clan"""
     clan_id = current_user.get("clan_id")
     if not clan_id:
         raise HTTPException(status_code=400, detail="Tu n'es pas dans un clan")
-
     clan = await db.clans.find_one({"id": clan_id})
     if not clan:
         raise HTTPException(status_code=404, detail="Clan non trouvé")
-
     clan_rank = current_user.get("clan_rank", "recrue")
-
-    # Si chef et seul membre → supprime le clan
     if clan_rank == "chef" and len(clan.get("members", [])) == 1:
         await db.clans.delete_one({"id": clan_id})
     elif clan_rank == "chef":
-        # Passe le grade de chef au prochain membre le plus gradé
-        members = clan.get("members", [])
-        members = [m for m in members if m["id"] != current_user["id"]]
+        members = [m for m in clan.get("members", []) if m["id"] != current_user["id"]]
         rank_order = ["expert", "analyste", "recrue"]
         new_chef = None
         for rank in rank_order:
@@ -1216,1775 +1050,152 @@ async def leave_clan(current_user: dict = Depends(get_current_user)):
         if not new_chef and members:
             new_chef = members[0]
         if new_chef:
-            await db.clans.update_one(
-                {"id": clan_id, "members.id": new_chef["id"]},
-                {"$set": {"members.$.rank": "chef"}}
-            )
-            await db.users.update_one(
-                {"id": new_chef["id"]},
-                {"$set": {"clan_rank": "chef"}}
-            )
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
+            await db.clans.update_one({"id": clan_id, "members.id": new_chef["id"]}, {"$set": {"members.$.rank": "chef"}})
+            await db.users.update_one({"id": new_chef["id"]}, {"$set": {"clan_rank": "chef"}})
+        await db.clans.update_one({"id": clan_id}, {"$pull": {"members": {"id": current_user["id"]}}})
     else:
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
+        await db.clans.update_one({"id": clan_id}, {"$pull": {"members": {"id": current_user["id"]}}})
+    await db.users.update_one({"id": current_user["id"]}, {"$unset": {"clan_id": "", "clan_rank": ""}})
     return {"message": "Tu as quitté le clan"}
 
 @api_router.post("/clans/{clan_id}/promote")
-async def promote_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Promouvoir un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank != "chef":
+async def promote_member(clan_id: str, member_data: dict, current_user: dict = Depends(get_current_user)):
+    if current_user.get("clan_rank") != "chef":
         raise HTTPException(status_code=403, detail="Seul le chef peut promouvoir")
-
     member_id = member_data.get("member_id")
     new_rank = member_data.get("rank")
-
     if new_rank not in CLAN_RANKS:
         raise HTTPException(status_code=400, detail="Rang invalide")
     if new_rank == "chef":
         raise HTTPException(status_code=400, detail="Utilise /transfer-leadership pour transférer le commandement")
-
-    await db.clans.update_one(
-        {"id": clan_id, "members.id": member_id},
-        {"$set": {"members.$.rank": new_rank}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$set": {"clan_rank": new_rank}}
-    )
-
+    await db.clans.update_one({"id": clan_id, "members.id": member_id}, {"$set": {"members.$.rank": new_rank}})
+    await db.users.update_one({"id": member_id}, {"$set": {"clan_rank": new_rank}})
     return {"message": "Membre promu"}
 
 @api_router.post("/clans/{clan_id}/kick")
-async def kick_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Expulser un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
+async def kick_member(clan_id: str, member_data: dict, current_user: dict = Depends(get_current_user)):
+    if current_user.get("clan_rank") not in ["chef", "expert"]:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
-
     member_id = member_data.get("member_id")
     if member_id == current_user["id"]:
         raise HTTPException(status_code=400, detail="Tu ne peux pas t'expulser toi-même")
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$pull": {"members": {"id": member_id}}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
+    await db.clans.update_one({"id": clan_id}, {"$pull": {"members": {"id": member_id}}})
+    await db.users.update_one({"id": member_id}, {"$unset": {"clan_id": "", "clan_rank": ""}})
     return {"message": "Membre expulsé"}
+
+# ==================== CLAN CHAT ROUTES ====================
+
+@api_router.get("/clans/{clan_id}/chat")
+async def get_clan_chat(clan_id: str, current_user: dict = Depends(get_current_user)):
+    clan = await db.clans.find_one({"id": clan_id})
+    if not clan:
+        raise HTTPException(status_code=404, detail="Clan non trouvé")
+    is_member = any(m["id"] == current_user["id"] for m in clan.get("members", []))
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Tu n'es pas dans ce clan")
+    messages = await db.clan_messages.find({"clan_id": clan_id}).sort("created_at", -1).limit(100).to_list(100)
+    for m in messages:
+        clean_doc(m)
+        if isinstance(m.get("created_at"), datetime):
+            m["created_at"] = m["created_at"].isoformat()
+    messages.reverse()
+    return {"messages": messages}
+
+@api_router.post("/clans/{clan_id}/chat")
+async def send_clan_message(clan_id: str, message_data: dict, current_user: dict = Depends(get_current_user)):
+    clan = await db.clans.find_one({"id": clan_id})
+    if not clan:
+        raise HTTPException(status_code=404, detail="Clan non trouvé")
+    is_member = any(m["id"] == current_user["id"] for m in clan.get("members", []))
+    if not is_member:
+        raise HTTPException(status_code=403, detail="Tu n'es pas dans ce clan")
+    content = message_data.get("content", "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Message vide")
+    if len(content) > 200:
+        raise HTTPException(status_code=400, detail="Message trop long (200 caractères max)")
+    member = next((m for m in clan.get("members", []) if m["id"] == current_user["id"]), None)
+    clan_rank = member.get("rank", "recrue") if member else "recrue"
+    message = {
+        "id": str(uuid.uuid4()), "clan_id": clan_id,
+        "user_id": current_user["id"], "username": current_user["username"],
+        "clan_rank": clan_rank, "content": content,
+        "type": "message", "created_at": datetime.utcnow(),
+    }
+    await db.clan_messages.insert_one(message)
+    clean_doc(message)
+    message["created_at"] = message["created_at"].isoformat() if isinstance(message.get("created_at"), datetime) else message.get("created_at")
+    return {"message": message}
 
 # ==================== CLAN WAR ROUTES ====================
 
 @api_router.post("/clans/{clan_id}/war/start")
-async def start_war(
-    clan_id: str,
-    war_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lance la recherche d'une guerre de clan"""
+async def start_war(clan_id: str, war_data: dict, current_user: dict = Depends(get_current_user)):
     clan_rank = current_user.get("clan_rank", "recrue")
     if clan_rank not in ["chef", "expert"]:
         raise HTTPException(status_code=403, detail="Seul le chef ou un expert peut lancer une guerre")
-
     clan = await db.clans.find_one({"id": clan_id})
     if not clan:
         raise HTTPException(status_code=404, detail="Clan non trouvé")
-
     if clan.get("current_war_id"):
         raise HTTPException(status_code=400, detail="Ton clan est déjà en guerre")
-
     if clan_id in WAR_QUEUE:
         raise HTTPException(status_code=400, detail="Ton clan est déjà en file d'attente")
-
     war_format = war_data.get("format")
     if war_format not in WAR_FORMATS:
         raise HTTPException(status_code=400, detail="Format invalide (10, 15 ou 20)")
-
     selected_member_ids = war_data.get("member_ids", [])
     if len(selected_member_ids) != war_format:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tu dois sélectionner exactement {war_format} membres"
-        )
-
-    # Récupère les infos des membres sélectionnés
+        raise HTTPException(status_code=400, detail=f"Tu dois sélectionner exactement {war_format} membres")
     all_members = clan.get("members", [])
     selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-
     if len(selected_members) != war_format:
         raise HTTPException(status_code=400, detail="Certains membres sont invalides")
-
     genius_index = clan.get("genius_index", 0)
     league = get_league(genius_index)
-
-    # Ajoute à la file d'attente
     WAR_QUEUE[clan_id] = {
-        "clan_name": clan["name"],
-        "format": war_format,
-        "league": league["name"],
-        "genius_index": genius_index,
-        "members": selected_members,
-        "queued_at": datetime.utcnow().isoformat(),
+        "clan_name": clan["name"], "format": war_format,
+        "league": league["name"], "genius_index": genius_index,
+        "members": selected_members, "queued_at": datetime.utcnow().isoformat(),
     }
-
-    # Essaie de trouver un adversaire immédiatement
     war_id = await try_matchmaking(clan_id, db)
-
     if war_id:
-        return {
-            "status": "war_started",
-            "war_id": war_id,
-            "message": "Adversaire trouvé ! La guerre commence !",
-        }
+        return {"status": "war_started", "war_id": war_id, "message": "Adversaire trouvé ! La guerre commence !"}
     else:
-        return {
-            "status": "searching",
-            "message": f"Recherche d'un adversaire en ligue {league['name']}...",
-        }
+        return {"status": "searching", "message": f"Recherche d'un adversaire en ligue {league['name']}..."}
 
 @api_router.delete("/clans/{clan_id}/war/cancel")
-async def cancel_war_search(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Annule la recherche de guerre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
+async def cancel_war_search(clan_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user.get("clan_rank") not in ["chef", "expert"]:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
-
     if clan_id in WAR_QUEUE:
         WAR_QUEUE.pop(clan_id)
         return {"message": "Recherche annulée"}
     raise HTTPException(status_code=400, detail="Ton clan n'est pas en file d'attente")
 
 @api_router.get("/clans/{clan_id}/war/current")
-async def get_current_war(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère la guerre en cours du clan"""
+async def get_current_war(clan_id: str, current_user: dict = Depends(get_current_user)):
     clan = await db.clans.find_one({"id": clan_id})
     if not clan:
         raise HTTPException(status_code=404, detail="Clan non trouvé")
-
     war_id = clan.get("current_war_id")
-
-    # Vérifie si en file d'attente
     if clan_id in WAR_QUEUE:
-        return {
-            "status": "searching",
-            "queue_data": {
-                "format": WAR_QUEUE[clan_id]["format"],
-                "league": WAR_QUEUE[clan_id]["league"],
-                "queued_at": WAR_QUEUE[clan_id]["queued_at"],
-            }
-        }
-
+        return {"status": "searching", "queue_data": {
+            "format": WAR_QUEUE[clan_id]["format"],
+            "league": WAR_QUEUE[clan_id]["league"],
+            "queued_at": WAR_QUEUE[clan_id]["queued_at"],
+        }}
     if not war_id or war_id not in active_wars:
-        # Vérifie en base
         war_db = await db.clan_wars.find_one({"id": war_id}) if war_id else None
         if war_db:
             clean_doc(war_db)
             return {"status": "finished", "war": war_db}
         return {"status": "no_war"}
-
     scores = get_war_scores(war_id)
     return {"status": "active", "war_id": war_id, "scores": scores}
 
 @api_router.get("/wars/{war_id}/scores")
-async def get_war_scores_route(
-    war_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère les scores en temps réel d'une guerre"""
-    scores = get_war_scores(war_id)
-    if not scores:
-        raise HTTPException(status_code=404, detail="Guerre non trouvée")
-    return scores
-
-# ==================== CLAN ROUTES ====================
-
-@api_router.post("/clans")
-async def create_clan(
-    clan_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un nouveau clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas créer de clan")
-
-    # Vérifie que l'utilisateur n'est pas déjà dans un clan
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    name = clan_data.get("name", "").strip()
-    if not name or len(name) < 3 or len(name) > 20:
-        raise HTTPException(status_code=400, detail="Le nom doit faire entre 3 et 20 caractères")
-
-    # Vérifie que le nom n'existe pas déjà
-    if await db.clans.find_one({"name": name}):
-        raise HTTPException(status_code=400, detail="Ce nom de clan est déjà pris")
-
-    clan_id = str(uuid.uuid4())
-    tag = generate_clan_tag()
-    genius_index = 0
-    league = get_league(genius_index)
-
-    clan = {
-        "id": clan_id,
-        "name": name,
-        "tag": tag,
-        "description": clan_data.get("description", ""),
-        "genius_index": genius_index,
-        "league": league["name"],
-        "members": [{
-            "id": current_user["id"],
-            "username": current_user["username"],
-            "elo_online": current_user.get("elo_online", 1000),
-            "rank": "chef",
-        }],
-        "current_war_id": None,
-        "war_history": [],
-        "created_at": datetime.utcnow(),
-    }
-
-    await db.clans.insert_one(clan)
-    clean_doc(clan)
-
-    # Met à jour l'utilisateur
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "chef"}}
-    )
-
-    return {"clan": clan}
-
-@api_router.get("/clans/my")
-async def get_my_clan(current_user: dict = Depends(get_current_user)):
-    """Récupère le clan de l'utilisateur"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        return {"clan": None}
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        return {"clan": None}
-    clean_doc(clan)
-
-    # Calcule l'Elo total du clan
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-
-    return {"clan": clan}
-
-@api_router.get("/clans/search")
-async def search_clans(q: str = "", limit: int = 20):
-    """Recherche des clans par nom"""
-    query = {}
-    if q:
-        query["name"] = {"$regex": q, "$options": "i"}
-    clans = await db.clans.find(query).limit(limit).to_list(limit)
-    result = []
-    for clan in clans:
-        clean_doc(clan)
-        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-        result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
-            "description": clan.get("description", ""),
-            "genius_index": clan.get("genius_index", 0),
-            "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
-        })
-    return {"clans": result}
-
-@api_router.get("/clans/{clan_id}")
-async def get_clan(clan_id: str):
-    """Récupère le détail d'un clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-    clean_doc(clan)
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-    return {"clan": clan}
-
-@api_router.post("/clans/{clan_id}/join")
-async def join_clan(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Rejoindre un clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas rejoindre un clan")
-
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if len(clan.get("members", [])) >= 40:
-        raise HTTPException(status_code=400, detail="Le clan est complet (40/40)")
-
-    new_member = {
-        "id": current_user["id"],
-        "username": current_user["username"],
-        "elo_online": current_user.get("elo_online", 1000),
-        "rank": "recrue",
-    }
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$push": {"members": new_member}}
-    )
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}}
-    )
-
-    return {"message": f"Tu as rejoint le clan {clan['name']} !"}
-
-@api_router.post("/clans/leave")
-async def leave_clan(current_user: dict = Depends(get_current_user)):
-    """Quitter son clan"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        raise HTTPException(status_code=400, detail="Tu n'es pas dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    clan_rank = current_user.get("clan_rank", "recrue")
-
-    # Si chef et seul membre → supprime le clan
-    if clan_rank == "chef" and len(clan.get("members", [])) == 1:
-        await db.clans.delete_one({"id": clan_id})
-    elif clan_rank == "chef":
-        # Passe le grade de chef au prochain membre le plus gradé
-        members = clan.get("members", [])
-        members = [m for m in members if m["id"] != current_user["id"]]
-        rank_order = ["expert", "analyste", "recrue"]
-        new_chef = None
-        for rank in rank_order:
-            for m in members:
-                if m.get("rank") == rank:
-                    new_chef = m
-                    break
-            if new_chef:
-                break
-        if not new_chef and members:
-            new_chef = members[0]
-        if new_chef:
-            await db.clans.update_one(
-                {"id": clan_id, "members.id": new_chef["id"]},
-                {"$set": {"members.$.rank": "chef"}}
-            )
-            await db.users.update_one(
-                {"id": new_chef["id"]},
-                {"$set": {"clan_rank": "chef"}}
-            )
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-    else:
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Tu as quitté le clan"}
-
-@api_router.post("/clans/{clan_id}/promote")
-async def promote_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Promouvoir un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank != "chef":
-        raise HTTPException(status_code=403, detail="Seul le chef peut promouvoir")
-
-    member_id = member_data.get("member_id")
-    new_rank = member_data.get("rank")
-
-    if new_rank not in CLAN_RANKS:
-        raise HTTPException(status_code=400, detail="Rang invalide")
-    if new_rank == "chef":
-        raise HTTPException(status_code=400, detail="Utilise /transfer-leadership pour transférer le commandement")
-
-    await db.clans.update_one(
-        {"id": clan_id, "members.id": member_id},
-        {"$set": {"members.$.rank": new_rank}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$set": {"clan_rank": new_rank}}
-    )
-
-    return {"message": "Membre promu"}
-
-@api_router.post("/clans/{clan_id}/kick")
-async def kick_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Expulser un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    member_id = member_data.get("member_id")
-    if member_id == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Tu ne peux pas t'expulser toi-même")
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$pull": {"members": {"id": member_id}}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Membre expulsé"}
-
-# ==================== CLAN WAR ROUTES ====================
-
-@api_router.post("/clans/{clan_id}/war/start")
-async def start_war(
-    clan_id: str,
-    war_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lance la recherche d'une guerre de clan"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Seul le chef ou un expert peut lancer une guerre")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if clan.get("current_war_id"):
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en guerre")
-
-    if clan_id in WAR_QUEUE:
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en file d'attente")
-
-    war_format = war_data.get("format")
-    if war_format not in WAR_FORMATS:
-        raise HTTPException(status_code=400, detail="Format invalide (10, 15 ou 20)")
-
-    selected_member_ids = war_data.get("member_ids", [])
-    if len(selected_member_ids) != war_format:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tu dois sélectionner exactement {war_format} membres"
-        )
-
-    # Récupère les infos des membres sélectionnés
-    all_members = clan.get("members", [])
-    selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-
-    if len(selected_members) != war_format:
-        raise HTTPException(status_code=400, detail="Certains membres sont invalides")
-
-    genius_index = clan.get("genius_index", 0)
-    league = get_league(genius_index)
-
-    # Ajoute à la file d'attente
-    WAR_QUEUE[clan_id] = {
-        "clan_name": clan["name"],
-        "format": war_format,
-        "league": league["name"],
-        "genius_index": genius_index,
-        "members": selected_members,
-        "queued_at": datetime.utcnow().isoformat(),
-    }
-
-    # Essaie de trouver un adversaire immédiatement
-    war_id = await try_matchmaking(clan_id, db)
-
-    if war_id:
-        return {
-            "status": "war_started",
-            "war_id": war_id,
-            "message": "Adversaire trouvé ! La guerre commence !",
-        }
-    else:
-        return {
-            "status": "searching",
-            "message": f"Recherche d'un adversaire en ligue {league['name']}...",
-        }
-
-@api_router.delete("/clans/{clan_id}/war/cancel")
-async def cancel_war_search(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Annule la recherche de guerre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    if clan_id in WAR_QUEUE:
-        WAR_QUEUE.pop(clan_id)
-        return {"message": "Recherche annulée"}
-    raise HTTPException(status_code=400, detail="Ton clan n'est pas en file d'attente")
-
-@api_router.get("/clans/{clan_id}/war/current")
-async def get_current_war(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère la guerre en cours du clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    war_id = clan.get("current_war_id")
-
-    # Vérifie si en file d'attente
-    if clan_id in WAR_QUEUE:
-        return {
-            "status": "searching",
-            "queue_data": {
-                "format": WAR_QUEUE[clan_id]["format"],
-                "league": WAR_QUEUE[clan_id]["league"],
-                "queued_at": WAR_QUEUE[clan_id]["queued_at"],
-            }
-        }
-
-    if not war_id or war_id not in active_wars:
-        # Vérifie en base
-        war_db = await db.clan_wars.find_one({"id": war_id}) if war_id else None
-        if war_db:
-            clean_doc(war_db)
-            return {"status": "finished", "war": war_db}
-        return {"status": "no_war"}
-
-    scores = get_war_scores(war_id)
-    return {"status": "active", "war_id": war_id, "scores": scores}
-
-@api_router.get("/wars/{war_id}/scores")
-async def get_war_scores_route(
-    war_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère les scores en temps réel d'une guerre"""
-    scores = get_war_scores(war_id)
-    if not scores:
-        raise HTTPException(status_code=404, detail="Guerre non trouvée")
-    return scores
-
-# ==================== CLAN ROUTES ====================
-
-@api_router.post("/clans")
-async def create_clan(
-    clan_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un nouveau clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas créer de clan")
-
-    # Vérifie que l'utilisateur n'est pas déjà dans un clan
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    name = clan_data.get("name", "").strip()
-    if not name or len(name) < 3 or len(name) > 20:
-        raise HTTPException(status_code=400, detail="Le nom doit faire entre 3 et 20 caractères")
-
-    # Vérifie que le nom n'existe pas déjà
-    if await db.clans.find_one({"name": name}):
-        raise HTTPException(status_code=400, detail="Ce nom de clan est déjà pris")
-
-    clan_id = str(uuid.uuid4())
-    tag = generate_clan_tag()
-    genius_index = 0
-    league = get_league(genius_index)
-
-    clan = {
-        "id": clan_id,
-        "name": name,
-        "tag": tag,
-        "description": clan_data.get("description", ""),
-        "genius_index": genius_index,
-        "league": league["name"],
-        "members": [{
-            "id": current_user["id"],
-            "username": current_user["username"],
-            "elo_online": current_user.get("elo_online", 1000),
-            "rank": "chef",
-        }],
-        "current_war_id": None,
-        "war_history": [],
-        "created_at": datetime.utcnow(),
-    }
-
-    await db.clans.insert_one(clan)
-    clean_doc(clan)
-
-    # Met à jour l'utilisateur
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "chef"}}
-    )
-
-    return {"clan": clan}
-
-@api_router.get("/clans/my")
-async def get_my_clan(current_user: dict = Depends(get_current_user)):
-    """Récupère le clan de l'utilisateur"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        return {"clan": None}
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        return {"clan": None}
-    clean_doc(clan)
-
-    # Calcule l'Elo total du clan
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-
-    return {"clan": clan}
-
-@api_router.get("/clans/search")
-async def search_clans(q: str = "", limit: int = 20):
-    """Recherche des clans par nom"""
-    query = {}
-    if q:
-        query["name"] = {"$regex": q, "$options": "i"}
-    clans = await db.clans.find(query).limit(limit).to_list(limit)
-    result = []
-    for clan in clans:
-        clean_doc(clan)
-        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-        result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
-            "description": clan.get("description", ""),
-            "genius_index": clan.get("genius_index", 0),
-            "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
-        })
-    return {"clans": result}
-
-@api_router.get("/clans/{clan_id}")
-async def get_clan(clan_id: str):
-    """Récupère le détail d'un clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-    clean_doc(clan)
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-    return {"clan": clan}
-
-@api_router.post("/clans/{clan_id}/join")
-async def join_clan(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Rejoindre un clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas rejoindre un clan")
-
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if len(clan.get("members", [])) >= 40:
-        raise HTTPException(status_code=400, detail="Le clan est complet (40/40)")
-
-    new_member = {
-        "id": current_user["id"],
-        "username": current_user["username"],
-        "elo_online": current_user.get("elo_online", 1000),
-        "rank": "recrue",
-    }
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$push": {"members": new_member}}
-    )
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}}
-    )
-
-    return {"message": f"Tu as rejoint le clan {clan['name']} !"}
-
-@api_router.post("/clans/leave")
-async def leave_clan(current_user: dict = Depends(get_current_user)):
-    """Quitter son clan"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        raise HTTPException(status_code=400, detail="Tu n'es pas dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    clan_rank = current_user.get("clan_rank", "recrue")
-
-    # Si chef et seul membre → supprime le clan
-    if clan_rank == "chef" and len(clan.get("members", [])) == 1:
-        await db.clans.delete_one({"id": clan_id})
-    elif clan_rank == "chef":
-        # Passe le grade de chef au prochain membre le plus gradé
-        members = clan.get("members", [])
-        members = [m for m in members if m["id"] != current_user["id"]]
-        rank_order = ["expert", "analyste", "recrue"]
-        new_chef = None
-        for rank in rank_order:
-            for m in members:
-                if m.get("rank") == rank:
-                    new_chef = m
-                    break
-            if new_chef:
-                break
-        if not new_chef and members:
-            new_chef = members[0]
-        if new_chef:
-            await db.clans.update_one(
-                {"id": clan_id, "members.id": new_chef["id"]},
-                {"$set": {"members.$.rank": "chef"}}
-            )
-            await db.users.update_one(
-                {"id": new_chef["id"]},
-                {"$set": {"clan_rank": "chef"}}
-            )
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-    else:
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Tu as quitté le clan"}
-
-@api_router.post("/clans/{clan_id}/promote")
-async def promote_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Promouvoir un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank != "chef":
-        raise HTTPException(status_code=403, detail="Seul le chef peut promouvoir")
-
-    member_id = member_data.get("member_id")
-    new_rank = member_data.get("rank")
-
-    if new_rank not in CLAN_RANKS:
-        raise HTTPException(status_code=400, detail="Rang invalide")
-    if new_rank == "chef":
-        raise HTTPException(status_code=400, detail="Utilise /transfer-leadership pour transférer le commandement")
-
-    await db.clans.update_one(
-        {"id": clan_id, "members.id": member_id},
-        {"$set": {"members.$.rank": new_rank}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$set": {"clan_rank": new_rank}}
-    )
-
-    return {"message": "Membre promu"}
-
-@api_router.post("/clans/{clan_id}/kick")
-async def kick_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Expulser un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    member_id = member_data.get("member_id")
-    if member_id == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Tu ne peux pas t'expulser toi-même")
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$pull": {"members": {"id": member_id}}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Membre expulsé"}
-
-# ==================== CLAN WAR ROUTES ====================
-
-@api_router.post("/clans/{clan_id}/war/start")
-async def start_war(
-    clan_id: str,
-    war_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lance la recherche d'une guerre de clan"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Seul le chef ou un expert peut lancer une guerre")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if clan.get("current_war_id"):
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en guerre")
-
-    if clan_id in WAR_QUEUE:
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en file d'attente")
-
-    war_format = war_data.get("format")
-    if war_format not in WAR_FORMATS:
-        raise HTTPException(status_code=400, detail="Format invalide (10, 15 ou 20)")
-
-    selected_member_ids = war_data.get("member_ids", [])
-    if len(selected_member_ids) != war_format:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tu dois sélectionner exactement {war_format} membres"
-        )
-
-    # Récupère les infos des membres sélectionnés
-    all_members = clan.get("members", [])
-    selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-
-    if len(selected_members) != war_format:
-        raise HTTPException(status_code=400, detail="Certains membres sont invalides")
-
-    genius_index = clan.get("genius_index", 0)
-    league = get_league(genius_index)
-
-    # Ajoute à la file d'attente
-    WAR_QUEUE[clan_id] = {
-        "clan_name": clan["name"],
-        "format": war_format,
-        "league": league["name"],
-        "genius_index": genius_index,
-        "members": selected_members,
-        "queued_at": datetime.utcnow().isoformat(),
-    }
-
-    # Essaie de trouver un adversaire immédiatement
-    war_id = await try_matchmaking(clan_id, db)
-
-    if war_id:
-        return {
-            "status": "war_started",
-            "war_id": war_id,
-            "message": "Adversaire trouvé ! La guerre commence !",
-        }
-    else:
-        return {
-            "status": "searching",
-            "message": f"Recherche d'un adversaire en ligue {league['name']}...",
-        }
-
-@api_router.delete("/clans/{clan_id}/war/cancel")
-async def cancel_war_search(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Annule la recherche de guerre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    if clan_id in WAR_QUEUE:
-        WAR_QUEUE.pop(clan_id)
-        return {"message": "Recherche annulée"}
-    raise HTTPException(status_code=400, detail="Ton clan n'est pas en file d'attente")
-
-@api_router.get("/clans/{clan_id}/war/current")
-async def get_current_war(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère la guerre en cours du clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    war_id = clan.get("current_war_id")
-
-    # Vérifie si en file d'attente
-    if clan_id in WAR_QUEUE:
-        return {
-            "status": "searching",
-            "queue_data": {
-                "format": WAR_QUEUE[clan_id]["format"],
-                "league": WAR_QUEUE[clan_id]["league"],
-                "queued_at": WAR_QUEUE[clan_id]["queued_at"],
-            }
-        }
-
-    if not war_id or war_id not in active_wars:
-        # Vérifie en base
-        war_db = await db.clan_wars.find_one({"id": war_id}) if war_id else None
-        if war_db:
-            clean_doc(war_db)
-            return {"status": "finished", "war": war_db}
-        return {"status": "no_war"}
-
-    scores = get_war_scores(war_id)
-    return {"status": "active", "war_id": war_id, "scores": scores}
-
-@api_router.get("/wars/{war_id}/scores")
-async def get_war_scores_route(
-    war_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère les scores en temps réel d'une guerre"""
-    scores = get_war_scores(war_id)
-    if not scores:
-        raise HTTPException(status_code=404, detail="Guerre non trouvée")
-    return scores
-
-# ==================== CLAN ROUTES ====================
-
-@api_router.post("/clans")
-async def create_clan(
-    clan_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un nouveau clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas créer de clan")
-
-    # Vérifie que l'utilisateur n'est pas déjà dans un clan
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    name = clan_data.get("name", "").strip()
-    if not name or len(name) < 3 or len(name) > 20:
-        raise HTTPException(status_code=400, detail="Le nom doit faire entre 3 et 20 caractères")
-
-    # Vérifie que le nom n'existe pas déjà
-    if await db.clans.find_one({"name": name}):
-        raise HTTPException(status_code=400, detail="Ce nom de clan est déjà pris")
-
-    clan_id = str(uuid.uuid4())
-    tag = generate_clan_tag()
-    genius_index = 0
-    league = get_league(genius_index)
-
-    clan = {
-        "id": clan_id,
-        "name": name,
-        "tag": tag,
-        "description": clan_data.get("description", ""),
-        "genius_index": genius_index,
-        "league": league["name"],
-        "members": [{
-            "id": current_user["id"],
-            "username": current_user["username"],
-            "elo_online": current_user.get("elo_online", 1000),
-            "rank": "chef",
-        }],
-        "current_war_id": None,
-        "war_history": [],
-        "created_at": datetime.utcnow(),
-    }
-
-    await db.clans.insert_one(clan)
-    clean_doc(clan)
-
-    # Met à jour l'utilisateur
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "chef"}}
-    )
-
-    return {"clan": clan}
-
-@api_router.get("/clans/my")
-async def get_my_clan(current_user: dict = Depends(get_current_user)):
-    """Récupère le clan de l'utilisateur"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        return {"clan": None}
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        return {"clan": None}
-    clean_doc(clan)
-
-    # Calcule l'Elo total du clan
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-
-    return {"clan": clan}
-
-@api_router.get("/clans/search")
-async def search_clans(q: str = "", limit: int = 20):
-    """Recherche des clans par nom"""
-    query = {}
-    if q:
-        query["name"] = {"$regex": q, "$options": "i"}
-    clans = await db.clans.find(query).limit(limit).to_list(limit)
-    result = []
-    for clan in clans:
-        clean_doc(clan)
-        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-        result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
-            "description": clan.get("description", ""),
-            "genius_index": clan.get("genius_index", 0),
-            "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
-        })
-    return {"clans": result}
-
-@api_router.get("/clans/{clan_id}")
-async def get_clan(clan_id: str):
-    """Récupère le détail d'un clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-    clean_doc(clan)
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-    return {"clan": clan}
-
-@api_router.post("/clans/{clan_id}/join")
-async def join_clan(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Rejoindre un clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas rejoindre un clan")
-
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if len(clan.get("members", [])) >= 40:
-        raise HTTPException(status_code=400, detail="Le clan est complet (40/40)")
-
-    new_member = {
-        "id": current_user["id"],
-        "username": current_user["username"],
-        "elo_online": current_user.get("elo_online", 1000),
-        "rank": "recrue",
-    }
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$push": {"members": new_member}}
-    )
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}}
-    )
-
-    return {"message": f"Tu as rejoint le clan {clan['name']} !"}
-
-@api_router.post("/clans/leave")
-async def leave_clan(current_user: dict = Depends(get_current_user)):
-    """Quitter son clan"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        raise HTTPException(status_code=400, detail="Tu n'es pas dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    clan_rank = current_user.get("clan_rank", "recrue")
-
-    # Si chef et seul membre → supprime le clan
-    if clan_rank == "chef" and len(clan.get("members", [])) == 1:
-        await db.clans.delete_one({"id": clan_id})
-    elif clan_rank == "chef":
-        # Passe le grade de chef au prochain membre le plus gradé
-        members = clan.get("members", [])
-        members = [m for m in members if m["id"] != current_user["id"]]
-        rank_order = ["expert", "analyste", "recrue"]
-        new_chef = None
-        for rank in rank_order:
-            for m in members:
-                if m.get("rank") == rank:
-                    new_chef = m
-                    break
-            if new_chef:
-                break
-        if not new_chef and members:
-            new_chef = members[0]
-        if new_chef:
-            await db.clans.update_one(
-                {"id": clan_id, "members.id": new_chef["id"]},
-                {"$set": {"members.$.rank": "chef"}}
-            )
-            await db.users.update_one(
-                {"id": new_chef["id"]},
-                {"$set": {"clan_rank": "chef"}}
-            )
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-    else:
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Tu as quitté le clan"}
-
-@api_router.post("/clans/{clan_id}/promote")
-async def promote_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Promouvoir un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank != "chef":
-        raise HTTPException(status_code=403, detail="Seul le chef peut promouvoir")
-
-    member_id = member_data.get("member_id")
-    new_rank = member_data.get("rank")
-
-    if new_rank not in CLAN_RANKS:
-        raise HTTPException(status_code=400, detail="Rang invalide")
-    if new_rank == "chef":
-        raise HTTPException(status_code=400, detail="Utilise /transfer-leadership pour transférer le commandement")
-
-    await db.clans.update_one(
-        {"id": clan_id, "members.id": member_id},
-        {"$set": {"members.$.rank": new_rank}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$set": {"clan_rank": new_rank}}
-    )
-
-    return {"message": "Membre promu"}
-
-@api_router.post("/clans/{clan_id}/kick")
-async def kick_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Expulser un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    member_id = member_data.get("member_id")
-    if member_id == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Tu ne peux pas t'expulser toi-même")
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$pull": {"members": {"id": member_id}}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Membre expulsé"}
-
-# ==================== CLAN WAR ROUTES ====================
-
-@api_router.post("/clans/{clan_id}/war/start")
-async def start_war(
-    clan_id: str,
-    war_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lance la recherche d'une guerre de clan"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Seul le chef ou un expert peut lancer une guerre")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if clan.get("current_war_id"):
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en guerre")
-
-    if clan_id in WAR_QUEUE:
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en file d'attente")
-
-    war_format = war_data.get("format")
-    if war_format not in WAR_FORMATS:
-        raise HTTPException(status_code=400, detail="Format invalide (10, 15 ou 20)")
-
-    selected_member_ids = war_data.get("member_ids", [])
-    if len(selected_member_ids) != war_format:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tu dois sélectionner exactement {war_format} membres"
-        )
-
-    # Récupère les infos des membres sélectionnés
-    all_members = clan.get("members", [])
-    selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-
-    if len(selected_members) != war_format:
-        raise HTTPException(status_code=400, detail="Certains membres sont invalides")
-
-    genius_index = clan.get("genius_index", 0)
-    league = get_league(genius_index)
-
-    # Ajoute à la file d'attente
-    WAR_QUEUE[clan_id] = {
-        "clan_name": clan["name"],
-        "format": war_format,
-        "league": league["name"],
-        "genius_index": genius_index,
-        "members": selected_members,
-        "queued_at": datetime.utcnow().isoformat(),
-    }
-
-    # Essaie de trouver un adversaire immédiatement
-    war_id = await try_matchmaking(clan_id, db)
-
-    if war_id:
-        return {
-            "status": "war_started",
-            "war_id": war_id,
-            "message": "Adversaire trouvé ! La guerre commence !",
-        }
-    else:
-        return {
-            "status": "searching",
-            "message": f"Recherche d'un adversaire en ligue {league['name']}...",
-        }
-
-@api_router.delete("/clans/{clan_id}/war/cancel")
-async def cancel_war_search(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Annule la recherche de guerre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    if clan_id in WAR_QUEUE:
-        WAR_QUEUE.pop(clan_id)
-        return {"message": "Recherche annulée"}
-    raise HTTPException(status_code=400, detail="Ton clan n'est pas en file d'attente")
-
-@api_router.get("/clans/{clan_id}/war/current")
-async def get_current_war(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère la guerre en cours du clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    war_id = clan.get("current_war_id")
-
-    # Vérifie si en file d'attente
-    if clan_id in WAR_QUEUE:
-        return {
-            "status": "searching",
-            "queue_data": {
-                "format": WAR_QUEUE[clan_id]["format"],
-                "league": WAR_QUEUE[clan_id]["league"],
-                "queued_at": WAR_QUEUE[clan_id]["queued_at"],
-            }
-        }
-
-    if not war_id or war_id not in active_wars:
-        # Vérifie en base
-        war_db = await db.clan_wars.find_one({"id": war_id}) if war_id else None
-        if war_db:
-            clean_doc(war_db)
-            return {"status": "finished", "war": war_db}
-        return {"status": "no_war"}
-
-    scores = get_war_scores(war_id)
-    return {"status": "active", "war_id": war_id, "scores": scores}
-
-@api_router.get("/wars/{war_id}/scores")
-async def get_war_scores_route(
-    war_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère les scores en temps réel d'une guerre"""
-    scores = get_war_scores(war_id)
-    if not scores:
-        raise HTTPException(status_code=404, detail="Guerre non trouvée")
-    return scores
-
-# ==================== CLAN ROUTES ====================
-
-@api_router.post("/clans")
-async def create_clan(
-    clan_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Créer un nouveau clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas créer de clan")
-
-    # Vérifie que l'utilisateur n'est pas déjà dans un clan
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    name = clan_data.get("name", "").strip()
-    if not name or len(name) < 3 or len(name) > 20:
-        raise HTTPException(status_code=400, detail="Le nom doit faire entre 3 et 20 caractères")
-
-    # Vérifie que le nom n'existe pas déjà
-    if await db.clans.find_one({"name": name}):
-        raise HTTPException(status_code=400, detail="Ce nom de clan est déjà pris")
-
-    clan_id = str(uuid.uuid4())
-    tag = generate_clan_tag()
-    genius_index = 0
-    league = get_league(genius_index)
-
-    clan = {
-        "id": clan_id,
-        "name": name,
-        "tag": tag,
-        "description": clan_data.get("description", ""),
-        "genius_index": genius_index,
-        "league": league["name"],
-        "members": [{
-            "id": current_user["id"],
-            "username": current_user["username"],
-            "elo_online": current_user.get("elo_online", 1000),
-            "rank": "chef",
-        }],
-        "current_war_id": None,
-        "war_history": [],
-        "created_at": datetime.utcnow(),
-    }
-
-    await db.clans.insert_one(clan)
-    clean_doc(clan)
-
-    # Met à jour l'utilisateur
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "chef"}}
-    )
-
-    return {"clan": clan}
-
-@api_router.get("/clans/my")
-async def get_my_clan(current_user: dict = Depends(get_current_user)):
-    """Récupère le clan de l'utilisateur"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        return {"clan": None}
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        return {"clan": None}
-    clean_doc(clan)
-
-    # Calcule l'Elo total du clan
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-
-    return {"clan": clan}
-
-@api_router.get("/clans/search")
-async def search_clans(q: str = "", limit: int = 20):
-    """Recherche des clans par nom"""
-    query = {}
-    if q:
-        query["name"] = {"$regex": q, "$options": "i"}
-    clans = await db.clans.find(query).limit(limit).to_list(limit)
-    result = []
-    for clan in clans:
-        clean_doc(clan)
-        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-        result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
-            "description": clan.get("description", ""),
-            "genius_index": clan.get("genius_index", 0),
-            "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
-        })
-    return {"clans": result}
-
-@api_router.get("/clans/{clan_id}")
-async def get_clan(clan_id: str):
-    """Récupère le détail d'un clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-    clean_doc(clan)
-    total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
-    clan["total_elo"] = total_elo
-    clan["league"] = get_league(clan.get("genius_index", 0))
-    return {"clan": clan}
-
-@api_router.post("/clans/{clan_id}/join")
-async def join_clan(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Rejoindre un clan"""
-    if current_user.get("role") == "teacher":
-        raise HTTPException(status_code=403, detail="Les professeurs ne peuvent pas rejoindre un clan")
-
-    existing = await db.clans.find_one({"members.id": current_user["id"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Tu es déjà dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if len(clan.get("members", [])) >= 40:
-        raise HTTPException(status_code=400, detail="Le clan est complet (40/40)")
-
-    new_member = {
-        "id": current_user["id"],
-        "username": current_user["username"],
-        "elo_online": current_user.get("elo_online", 1000),
-        "rank": "recrue",
-    }
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$push": {"members": new_member}}
-    )
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"clan_id": clan_id, "clan_rank": "recrue"}}
-    )
-
-    return {"message": f"Tu as rejoint le clan {clan['name']} !"}
-
-@api_router.post("/clans/leave")
-async def leave_clan(current_user: dict = Depends(get_current_user)):
-    """Quitter son clan"""
-    clan_id = current_user.get("clan_id")
-    if not clan_id:
-        raise HTTPException(status_code=400, detail="Tu n'es pas dans un clan")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    clan_rank = current_user.get("clan_rank", "recrue")
-
-    # Si chef et seul membre → supprime le clan
-    if clan_rank == "chef" and len(clan.get("members", [])) == 1:
-        await db.clans.delete_one({"id": clan_id})
-    elif clan_rank == "chef":
-        # Passe le grade de chef au prochain membre le plus gradé
-        members = clan.get("members", [])
-        members = [m for m in members if m["id"] != current_user["id"]]
-        rank_order = ["expert", "analyste", "recrue"]
-        new_chef = None
-        for rank in rank_order:
-            for m in members:
-                if m.get("rank") == rank:
-                    new_chef = m
-                    break
-            if new_chef:
-                break
-        if not new_chef and members:
-            new_chef = members[0]
-        if new_chef:
-            await db.clans.update_one(
-                {"id": clan_id, "members.id": new_chef["id"]},
-                {"$set": {"members.$.rank": "chef"}}
-            )
-            await db.users.update_one(
-                {"id": new_chef["id"]},
-                {"$set": {"clan_rank": "chef"}}
-            )
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-    else:
-        await db.clans.update_one(
-            {"id": clan_id},
-            {"$pull": {"members": {"id": current_user["id"]}}}
-        )
-
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Tu as quitté le clan"}
-
-@api_router.post("/clans/{clan_id}/promote")
-async def promote_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Promouvoir un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank != "chef":
-        raise HTTPException(status_code=403, detail="Seul le chef peut promouvoir")
-
-    member_id = member_data.get("member_id")
-    new_rank = member_data.get("rank")
-
-    if new_rank not in CLAN_RANKS:
-        raise HTTPException(status_code=400, detail="Rang invalide")
-    if new_rank == "chef":
-        raise HTTPException(status_code=400, detail="Utilise /transfer-leadership pour transférer le commandement")
-
-    await db.clans.update_one(
-        {"id": clan_id, "members.id": member_id},
-        {"$set": {"members.$.rank": new_rank}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$set": {"clan_rank": new_rank}}
-    )
-
-    return {"message": "Membre promu"}
-
-@api_router.post("/clans/{clan_id}/kick")
-async def kick_member(
-    clan_id: str,
-    member_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Expulser un membre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    member_id = member_data.get("member_id")
-    if member_id == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Tu ne peux pas t'expulser toi-même")
-
-    await db.clans.update_one(
-        {"id": clan_id},
-        {"$pull": {"members": {"id": member_id}}}
-    )
-    await db.users.update_one(
-        {"id": member_id},
-        {"$unset": {"clan_id": "", "clan_rank": ""}}
-    )
-
-    return {"message": "Membre expulsé"}
-
-# ==================== CLAN WAR ROUTES ====================
-
-@api_router.post("/clans/{clan_id}/war/start")
-async def start_war(
-    clan_id: str,
-    war_data: dict,
-    current_user: dict = Depends(get_current_user)
-):
-    """Lance la recherche d'une guerre de clan"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Seul le chef ou un expert peut lancer une guerre")
-
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    if clan.get("current_war_id"):
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en guerre")
-
-    if clan_id in WAR_QUEUE:
-        raise HTTPException(status_code=400, detail="Ton clan est déjà en file d'attente")
-
-    war_format = war_data.get("format")
-    if war_format not in WAR_FORMATS:
-        raise HTTPException(status_code=400, detail="Format invalide (10, 15 ou 20)")
-
-    selected_member_ids = war_data.get("member_ids", [])
-    if len(selected_member_ids) != war_format:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tu dois sélectionner exactement {war_format} membres"
-        )
-
-    # Récupère les infos des membres sélectionnés
-    all_members = clan.get("members", [])
-    selected_members = [m for m in all_members if m["id"] in selected_member_ids]
-
-    if len(selected_members) != war_format:
-        raise HTTPException(status_code=400, detail="Certains membres sont invalides")
-
-    genius_index = clan.get("genius_index", 0)
-    league = get_league(genius_index)
-
-    # Ajoute à la file d'attente
-    WAR_QUEUE[clan_id] = {
-        "clan_name": clan["name"],
-        "format": war_format,
-        "league": league["name"],
-        "genius_index": genius_index,
-        "members": selected_members,
-        "queued_at": datetime.utcnow().isoformat(),
-    }
-
-    # Essaie de trouver un adversaire immédiatement
-    war_id = await try_matchmaking(clan_id, db)
-
-    if war_id:
-        return {
-            "status": "war_started",
-            "war_id": war_id,
-            "message": "Adversaire trouvé ! La guerre commence !",
-        }
-    else:
-        return {
-            "status": "searching",
-            "message": f"Recherche d'un adversaire en ligue {league['name']}...",
-        }
-
-@api_router.delete("/clans/{clan_id}/war/cancel")
-async def cancel_war_search(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Annule la recherche de guerre"""
-    clan_rank = current_user.get("clan_rank", "recrue")
-    if clan_rank not in ["chef", "expert"]:
-        raise HTTPException(status_code=403, detail="Accès non autorisé")
-
-    if clan_id in WAR_QUEUE:
-        WAR_QUEUE.pop(clan_id)
-        return {"message": "Recherche annulée"}
-    raise HTTPException(status_code=400, detail="Ton clan n'est pas en file d'attente")
-
-@api_router.get("/clans/{clan_id}/war/current")
-async def get_current_war(
-    clan_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère la guerre en cours du clan"""
-    clan = await db.clans.find_one({"id": clan_id})
-    if not clan:
-        raise HTTPException(status_code=404, detail="Clan non trouvé")
-
-    war_id = clan.get("current_war_id")
-
-    # Vérifie si en file d'attente
-    if clan_id in WAR_QUEUE:
-        return {
-            "status": "searching",
-            "queue_data": {
-                "format": WAR_QUEUE[clan_id]["format"],
-                "league": WAR_QUEUE[clan_id]["league"],
-                "queued_at": WAR_QUEUE[clan_id]["queued_at"],
-            }
-        }
-
-    if not war_id or war_id not in active_wars:
-        # Vérifie en base
-        war_db = await db.clan_wars.find_one({"id": war_id}) if war_id else None
-        if war_db:
-            clean_doc(war_db)
-            return {"status": "finished", "war": war_db}
-        return {"status": "no_war"}
-
-    scores = get_war_scores(war_id)
-    return {"status": "active", "war_id": war_id, "scores": scores}
-
-@api_router.get("/wars/{war_id}/scores")
-async def get_war_scores_route(
-    war_id: str,
-    current_user: dict = Depends(get_current_user)
-):
-    """Récupère les scores en temps réel d'une guerre"""
+async def get_war_scores_route(war_id: str, current_user: dict = Depends(get_current_user)):
     scores = get_war_scores(war_id)
     if not scores:
         raise HTTPException(status_code=404, detail="Guerre non trouvée")
@@ -2994,40 +1205,31 @@ async def get_war_scores_route(
 
 @api_router.get("/rankings/clans/genius")
 async def ranking_clans_genius(limit: int = 50):
-    """Classement des clans par indice de génie"""
     clans = await db.clans.find().sort("genius_index", -1).limit(limit).to_list(limit)
     result = []
     for rank, clan in enumerate(clans, 1):
         clean_doc(clan)
         total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
         result.append({
-            "rank": rank,
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
+            "rank": rank, "id": clan["id"], "name": clan["name"], "tag": clan["tag"],
             "genius_index": clan.get("genius_index", 0),
             "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
+            "members_count": len(clan.get("members", [])), "total_elo": total_elo,
         })
     return {"rankings": result}
 
 @api_router.get("/rankings/clans/elo")
 async def ranking_clans_elo(limit: int = 50):
-    """Classement des clans par Elo total"""
     clans = await db.clans.find().to_list(500)
     result = []
     for clan in clans:
         clean_doc(clan)
-        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", [])) 
+        total_elo = sum(m.get("elo_online", 1000) for m in clan.get("members", []))
         result.append({
-            "id": clan["id"],
-            "name": clan["name"],
-            "tag": clan["tag"],
+            "id": clan["id"], "name": clan["name"], "tag": clan["tag"],
             "genius_index": clan.get("genius_index", 0),
             "league": get_league(clan.get("genius_index", 0)),
-            "members_count": len(clan.get("members", [])),
-            "total_elo": total_elo,
+            "members_count": len(clan.get("members", [])), "total_elo": total_elo,
         })
     result.sort(key=lambda x: x["total_elo"], reverse=True)
     for rank, item in enumerate(result[:limit], 1):
@@ -3046,9 +1248,7 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
         player_data = json.loads(data)
         username = player_data.get("username")
         elo_online = player_data.get("elo_online", 1000)
-        asyncio.create_task(
-            find_match(user_id, username, elo_online, websocket, db)
-        )
+        asyncio.create_task(find_match(user_id, username, elo_online, websocket, db))
         while True:
             message = await websocket.receive_text()
             msg_data = json.loads(message)
@@ -3064,10 +1264,7 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
                             user = await db.users.find_one({"id": user_id})
                             if user:
                                 new_elo_online = max(100, user.get("elo_online", 1000) + elo_change)
-                                await db.users.update_one(
-                                    {"id": user_id},
-                                    {"$set": {"elo_online": new_elo_online}}
-                                )
+                                await db.users.update_one({"id": user_id}, {"$set": {"elo_online": new_elo_online}})
                     else:
                         await process_answer(match_id, user_id, answer)
             elif msg_data.get("type") == "cancel_search":
@@ -3075,14 +1272,94 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
                     waiting_queue.pop(user_id)
                     await websocket.send_text(json.dumps({"type": "search_cancelled"}))
     except WebSocketDisconnect:
-        if user_id in connections:
-            connections.pop(user_id)
-        if user_id in waiting_queue:
-            waiting_queue.pop(user_id)
+        connections.pop(user_id, None)
+        waiting_queue.pop(user_id, None)
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
-        if user_id in connections:
-            connections.pop(user_id)
+        connections.pop(user_id, None)
+
+# ==================== WEBSOCKET GUERRE ====================
+
+@app.websocket("/ws/war/{user_id}")
+async def war_websocket(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    war_connections[user_id] = websocket
+    import json
+    try:
+        while True:
+            message = await websocket.receive_text()
+            msg_data = json.loads(message)
+            if msg_data.get("type") == "start_battle":
+                war_id = msg_data.get("war_id")
+                result = await start_player_battle(war_id, user_id)
+                if result:
+                    await websocket.send_text(json.dumps({"type": "battle_ready", **result}))
+            elif msg_data.get("type") == "submit_answer":
+                war_id = msg_data.get("war_id")
+                problem_id = msg_data.get("problem_id")
+                answer = float(msg_data.get("answer", 0))
+                result = await submit_war_answer(war_id, user_id, problem_id, answer)
+                if result:
+                    await websocket.send_text(json.dumps({"type": "answer_result", **result}))
+            elif msg_data.get("type") == "get_scores":
+                war_id = msg_data.get("war_id")
+                scores = get_war_scores(war_id)
+                await websocket.send_text(json.dumps({"type": "scores_update", "scores": scores}))
+    except WebSocketDisconnect:
+        war_connections.pop(user_id, None)
+    except Exception as e:
+        logger.error(f"War WebSocket error: {e}")
+        war_connections.pop(user_id, None)
+
+# ==================== WEBSOCKET CHAT CLAN ====================
+
+@app.websocket("/ws/clan/{clan_id}/{user_id}")
+async def clan_chat_websocket(websocket: WebSocket, clan_id: str, user_id: str):
+    await websocket.accept()
+    if clan_id not in clan_chat_connections:
+        clan_chat_connections[clan_id] = {}
+    clan_chat_connections[clan_id][user_id] = websocket
+    import json
+    try:
+        while True:
+            data = await websocket.receive_text()
+            msg_data = json.loads(data)
+            if msg_data.get("type") == "message":
+                content = msg_data.get("content", "").strip()
+                if not content or len(content) > 200:
+                    continue
+                clan = await db.clans.find_one({"id": clan_id})
+                if not clan:
+                    continue
+                member = next((m for m in clan.get("members", []) if m["id"] == user_id), None)
+                if not member:
+                    continue
+                now = datetime.utcnow()
+                message = {
+                    "id": str(uuid.uuid4()), "clan_id": clan_id,
+                    "user_id": user_id, "username": member["username"],
+                    "clan_rank": member.get("rank", "recrue"),
+                    "content": content, "type": "message",
+                    "created_at": now.isoformat(),
+                }
+                await db.clan_messages.insert_one({**message, "created_at": now})
+                # Broadcast à tous les membres connectés
+                if clan_id in clan_chat_connections:
+                    dead = []
+                    for uid, ws in clan_chat_connections[clan_id].items():
+                        try:
+                            await ws.send_text(json.dumps({"type": "new_message", "message": message}))
+                        except Exception:
+                            dead.append(uid)
+                    for uid in dead:
+                        clan_chat_connections[clan_id].pop(uid, None)
+    except WebSocketDisconnect:
+        if clan_id in clan_chat_connections:
+            clan_chat_connections[clan_id].pop(user_id, None)
+    except Exception as e:
+        logger.error(f"Chat WebSocket error: {e}")
+        if clan_id in clan_chat_connections:
+            clan_chat_connections[clan_id].pop(user_id, None)
 
 app.include_router(api_router)
 app.add_middleware(
@@ -3092,53 +1369,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.websocket("/ws/war/{user_id}")
-async def war_websocket(websocket: WebSocket, user_id: str):
-    """WebSocket pour la guerre de clan en temps réel"""
-    await websocket.accept()
-    war_connections[user_id] = websocket
-    import json
-    try:
-        while True:
-            message = await websocket.receive_text()
-            msg_data = json.loads(message)
-
-            if msg_data.get("type") == "start_battle":
-                war_id = msg_data.get("war_id")
-                result = await start_player_battle(war_id, user_id)
-                if result:
-                    await websocket.send_text(json.dumps({
-                        "type": "battle_ready",
-                        **result
-                    }))
-
-            elif msg_data.get("type") == "submit_answer":
-                war_id = msg_data.get("war_id")
-                problem_id = msg_data.get("problem_id")
-                answer = float(msg_data.get("answer", 0))
-                result = await submit_war_answer(war_id, user_id, problem_id, answer)
-                if result:
-                    await websocket.send_text(json.dumps({
-                        "type": "answer_result",
-                        **result
-                    }))
-
-            elif msg_data.get("type") == "get_scores":
-                war_id = msg_data.get("war_id")
-                scores = get_war_scores(war_id)
-                await websocket.send_text(json.dumps({
-                    "type": "scores_update",
-                    "scores": scores,
-                }))
-
-    except WebSocketDisconnect:
-        if user_id in war_connections:
-            war_connections.pop(user_id)
-    except Exception as e:
-        logger.error(f"War WebSocket error: {e}")
-        if user_id in war_connections:
-            war_connections.pop(user_id)
 
 @app.on_event("shutdown")
 async def shutdown():
