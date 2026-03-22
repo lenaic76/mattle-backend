@@ -808,14 +808,17 @@ async def get_class_stats(
             student_stats[sid] = {
                 "student_id": sid,
                 "username": r.get("username", "Inconnu"),
-                "total": 0, "correct": 0,
+                "total": 0,
+                "correct": 0,
                 "exercises_done": set(),
+                "total_time": 0,
                 "history": [],
             }
         student_stats[sid]["total"] += 1
         if r.get("correct"):
             student_stats[sid]["correct"] += 1
         student_stats[sid]["exercises_done"].add(r.get("exercise_id"))
+        student_stats[sid]["total_time"] += r.get("time_spent", 0)
         student_stats[sid]["history"].append({
             "date": r.get("date"),
             "correct": r.get("correct"),
@@ -833,6 +836,10 @@ async def get_class_stats(
             "correct_answers": stats["correct"],
             "accuracy": accuracy,
             "exercises_done": len(stats["exercises_done"]),
+            "total_time_seconds": stats["total_time"],
+            "avg_time_per_question": round(
+                stats["total_time"] / stats["total"], 1
+            ) if stats["total"] > 0 else 0,
             "history": sorted(stats["history"], key=lambda x: x.get("date", "")),
         })
     students_list.sort(key=lambda x: x["accuracy"], reverse=True)
@@ -843,12 +850,15 @@ async def get_class_stats(
             exercise_stats[eid] = {
                 "exercise_id": eid,
                 "title": r.get("exercise_title", "Exercice"),
-                "total": 0, "correct": 0,
+                "total": 0,
+                "correct": 0,
+                "total_time": 0,
                 "students_attempted": set(),
             }
         exercise_stats[eid]["total"] += 1
         if r.get("correct"):
             exercise_stats[eid]["correct"] += 1
+        exercise_stats[eid]["total_time"] += r.get("time_spent", 0)
         exercise_stats[eid]["students_attempted"].add(r.get("student_id"))
     exercises_list = []
     for eid, stats in exercise_stats.items():
@@ -862,6 +872,9 @@ async def get_class_stats(
             "correct_answers": stats["correct"],
             "accuracy": accuracy,
             "students_attempted": len(stats["students_attempted"]),
+            "avg_time_seconds": round(
+                stats["total_time"] / stats["total"], 1
+            ) if stats["total"] > 0 else 0,
         })
     return {
         "class_name": class_doc["name"],
@@ -966,9 +979,12 @@ async def submit_exercise_result(
     if not exercise:
         raise HTTPException(status_code=404, detail="Exercice non trouvé")
     answers = result_data.get("answers", [])
+    time_spent = result_data.get("time_spent", 0)
     questions = exercise.get("questions", [])
     results = []
     correct_count = 0
+    nb_questions = len(questions)
+    time_per_question = round(time_spent / nb_questions, 1) if nb_questions > 0 else 0
     for i, question in enumerate(questions):
         if i < len(answers):
             try:
@@ -997,6 +1013,7 @@ async def submit_exercise_result(
                 "student_answer": student_answer,
                 "correct_answer": correct_answer,
                 "correct": is_correct,
+                "time_spent": time_per_question,
                 "date": get_today_date(),
                 "created_at": datetime.utcnow(),
             })
@@ -1006,6 +1023,7 @@ async def submit_exercise_result(
         "correct_count": correct_count,
         "total": len(questions),
         "accuracy": accuracy,
+        "time_spent": time_spent,
     }
 
 # ==================== WEBSOCKET DUEL ====================
