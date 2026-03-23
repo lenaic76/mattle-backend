@@ -29,6 +29,10 @@ from clan_war import (
     submit_war_answer, end_war, send_war, broadcast_war
 )
 from problem_generators import get_problem_data
+from friend_duel import (
+    active_friend_duels, friend_duel_connections,
+    create_friend_duel, submit_friend_answer, send_friend_duel
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1402,6 +1406,381 @@ async def clan_chat_websocket(websocket: WebSocket, clan_id: str, user_id: str):
         logger.error(f"Chat WebSocket error: {e}")
         if clan_id in clan_chat_connections:
             clan_chat_connections[clan_id].pop(user_id, None)
+
+@app.websocket("/ws/friend-duel/{user_id}")
+async def friend_duel_websocket(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+    friend_duel_connections[user_id] = websocket
+    import json
+    try:
+        while True:
+            message = await websocket.receive_text()
+            msg_data = json.loads(message)
+
+            if msg_data.get("type") == "submit_answer":
+                duel_id = msg_data.get("duel_id")
+                problem_id = msg_data.get("problem_id")
+                answer = float(msg_data.get("answer", 0))
+                result = await submit_friend_answer(duel_id, user_id, problem_id, answer, db)
+                await websocket.send_text(json.dumps({
+                    "type": "answer_ack",
+                    **result,
+                }))
+
+    except WebSocketDisconnect:
+        friend_duel_connections.pop(user_id, None)
+    except Exception as e:
+        logger.error(f"Friend duel WebSocket error: {e}")
+        friend_duel_connections.pop(user_id, None)
+
+# ==================== FRIENDS ROUTES ====================
+
+@api_router.post("/friends/request/{target_username}")
+async def send_friend_request(
+    target_username: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if target_username == current_user["username"]:
+        raise HTTPException(status_code=400, detail="Tu ne peux pas t'ajouter toi-même")
+
+    target = await db.users.find_one({"username": target_username})
+    if not target:
+        raise HTTPException(status_code=404, detail="Joueur non trouvé")
+
+    # Vérifie si demande déjà envoyée ou amis
+    existing = await db.friendships.find_one({
+        "$or": [
+            {"sender_id": current_user["id"], "receiver_id": target["id"]},
+            {"sender_id": target["id"], "receiver_id": current_user["id"]},
+        ]
+    })
+    if existing:
+        if existing["status"] == "accepted":
+            raise HTTPException(status_code=400, detail="Vous êtes déjà amis")
+        raise HTTPException(status_code=400, detail="Demande déjà envoyée")
+
+    friendship = {
+        "id": str(uuid.uuid4()),
+        "sender_id": current_user["id"],
+        "sender_username": current_user["username"],
+        "receiver_id": target["id"],
+        "receiver_username": target["username"],
+        "status": "pending",
+        "created_at": datetime.utcnow(),
+    }
+    await db.friendships.insert_one(friendship)
+    return {"message": f"Demande d'ami envoyée à {target_username}"}
+
+@api_router.post("/friends/accept/{friendship_id}")
+async def accept_friend_request(
+    friendship_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    friendship = await db.friendships.find_one({"id": friendship_id})
+    if not friendship:
+        raise HTTPException(status_code=404, detail="Demande non trouvée")
+    if friendship["receiver_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Non autorisé")
+    if friendship["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Demande déjà traitée")
+
+    await db.friendships.update_one(
+        {"id": friendship_id},
+        {"$set": {"status": "accepted"}}
+    )
+    return {"message": "Demande acceptée !"}
+
+@api_router.post("/friends/decline/{friendship_id}")
+async def decline_friend_request(
+    friendship_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    friendship = await db.friendships.find_one({"id": friendship_id})
+    if not friendship:
+        raise HTTPException(status_code=404, detail="Demande non trouvée")
+    if friendship["receiver_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Non autorisé")
+
+    await db.friendships.delete_one({"id": friendship_id})
+    return {"message": "Demande refusée"}
+
+@api_router.delete("/friends/{friend_id}")
+async def remove_friend(
+    friend_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    await db.friendships.delete_one({
+        "$or": [
+            {"sender_id": current_user["id"], "receiver_id": friend_id, "status": "accepted"},
+            {"sender_id": friend_id, "receiver_id": current_user["id"], "status": "accepted"},
+        ]
+    })
+    return {"message": "Ami supprimé"}
+
+@api_router.get("/friends")
+async def get_friends(current_user: dict = Depends(get_current_user)):
+    # Amis acceptés
+    friendships = await db.friendships.find({
+        "$or": [
+            {"sender_id": current_user["id"], "status": "accepted"},
+            {"receiver_id": current_user["id"], "status": "accepted"},
+        ]
+    }).to_list(100)
+
+    friends = []
+    for f in friendships:
+        clean_doc(f)
+        if f["sender_id"] == current_user["id"]:
+            friend_id = f["receiver_id"]
+            friend_username = f["receiver_username"]
+        else:
+            friend_id = f["sender_id"]
+            friend_username = f["sender_username"]
+
+        friend_user = await db.users.find_one({"id": friend_id})
+        friends.append({
+            "friendship_id": f["id"],
+            "id": friend_id,
+            "username": friend_username,
+            "elo": friend_user.get("elo", 1000) if friend_user else 1000,
+            "elo_online": friend_user.get("elo_online", 1000) if friend_user else 1000,
+            "grade": friend_user.get("grade", 6) if friend_user else 6,
+        })
+
+    # Demandes reçues en attente
+    pending = await db.friendships.find({
+        "receiver_id": current_user["id"],
+        "status": "pending",
+    }).to_list(50)
+    pending_list = []
+    for p in pending:
+        clean_doc(p)
+        pending_list.append({
+            "friendship_id": p["id"],
+            "sender_id": p["sender_id"],
+            "sender_username": p["sender_username"],
+        })
+
+    # Demandes envoyées en attente
+    sent = await db.friendships.find({
+        "sender_id": current_user["id"],
+        "status": "pending",
+    }).to_list(50)
+    sent_list = []
+    for s in sent:
+        clean_doc(s)
+        sent_list.append({
+            "friendship_id": s["id"],
+            "receiver_username": s["receiver_username"],
+        })
+
+    return {
+        "friends": friends,
+        "pending_received": pending_list,
+        "pending_sent": sent_list,
+    }
+
+@api_router.get("/friends/search/{username}")
+async def search_player(
+    username: str,
+    current_user: dict = Depends(get_current_user)
+):
+    users = await db.users.find({
+        "username": {"$regex": username, "$options": "i"},
+        "role": "student",
+        "id": {"$ne": current_user["id"]},
+    }).limit(10).to_list(10)
+
+    result = []
+    for u in users:
+        # Vérifie le statut d'amitié
+        friendship = await db.friendships.find_one({
+            "$or": [
+                {"sender_id": current_user["id"], "receiver_id": u["id"]},
+                {"sender_id": u["id"], "receiver_id": current_user["id"]},
+            ]
+        })
+        status = friendship["status"] if friendship else None
+        is_sender = friendship["sender_id"] == current_user["id"] if friendship else False
+
+        result.append({
+            "id": u["id"],
+            "username": u["username"],
+            "elo_online": u.get("elo_online", 1000),
+            "grade": u.get("grade", 6),
+            "friendship_status": status,
+            "is_sender": is_sender,
+            "friendship_id": friendship["id"] if friendship else None,
+        })
+
+    return {"players": result}
+
+@api_router.get("/friends/qr/{user_id}")
+async def get_qr_code(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Retourne les infos pour générer un QR code côté frontend"""
+    return {
+        "user_id": current_user["id"],
+        "username": current_user["username"],
+        "add_url": f"mattle://add-friend/{current_user['id']}/{current_user['username']}",
+    }
+
+@api_router.post("/friends/add-by-id/{target_id}")
+async def add_friend_by_id(
+    target_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Ajouter un ami via QR code (par ID)"""
+    if target_id == current_user["id"]:
+        raise HTTPException(status_code=400, detail="Tu ne peux pas t'ajouter toi-même")
+
+    target = await db.users.find_one({"id": target_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="Joueur non trouvé")
+
+    existing = await db.friendships.find_one({
+        "$or": [
+            {"sender_id": current_user["id"], "receiver_id": target_id},
+            {"sender_id": target_id, "receiver_id": current_user["id"]},
+        ]
+    })
+    if existing:
+        if existing["status"] == "accepted":
+            raise HTTPException(status_code=400, detail="Vous êtes déjà amis")
+        raise HTTPException(status_code=400, detail="Demande déjà envoyée")
+
+    friendship = {
+        "id": str(uuid.uuid4()),
+        "sender_id": current_user["id"],
+        "sender_username": current_user["username"],
+        "receiver_id": target_id,
+        "receiver_username": target["username"],
+        "status": "pending",
+        "created_at": datetime.utcnow(),
+    }
+    await db.friendships.insert_one(friendship)
+    return {"message": f"Demande envoyée à {target['username']}"}
+
+# ==================== FRIEND DUEL ROUTES ====================
+
+@api_router.post("/friends/{friend_id}/duel")
+async def invite_friend_duel(
+    friend_id: str,
+    duel_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    # Vérifie qu'ils sont amis
+    friendship = await db.friendships.find_one({
+        "$or": [
+            {"sender_id": current_user["id"], "receiver_id": friend_id, "status": "accepted"},
+            {"sender_id": friend_id, "receiver_id": current_user["id"], "status": "accepted"},
+        ]
+    })
+    if not friendship:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas amis")
+
+    friend = await db.users.find_one({"id": friend_id})
+    if not friend:
+        raise HTTPException(status_code=404, detail="Ami non trouvé")
+
+    mode = duel_data.get("mode", "friendly")
+    if mode not in ["friendly", "ranked"]:
+        raise HTTPException(status_code=400, detail="Mode invalide")
+
+    # Crée une invitation en base
+    invite_id = str(uuid.uuid4())
+    await db.friend_duel_invites.insert_one({
+        "id": invite_id,
+        "challenger_id": current_user["id"],
+        "challenger_username": current_user["username"],
+        "challenged_id": friend_id,
+        "mode": mode,
+        "status": "pending",
+        "created_at": datetime.utcnow(),
+    })
+
+    # Notifie l'ami via WebSocket s'il est connecté
+    await send_friend_duel(friend_id, {
+        "type": "duel_invite",
+        "invite_id": invite_id,
+        "challenger": current_user["username"],
+        "mode": mode,
+    })
+
+    return {"invite_id": invite_id, "message": f"Invitation envoyée à {friend['username']}"}
+
+@api_router.post("/friend-duels/{invite_id}/accept")
+async def accept_friend_duel(
+    invite_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    invite = await db.friend_duel_invites.find_one({"id": invite_id})
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation non trouvée")
+    if invite["challenged_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Non autorisé")
+    if invite["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Invitation déjà traitée")
+
+    await db.friend_duel_invites.update_one(
+        {"id": invite_id}, {"$set": {"status": "accepted"}}
+    )
+
+    challenger = await db.users.find_one({"id": invite["challenger_id"]})
+    if not challenger:
+        raise HTTPException(status_code=404, detail="Challenger non trouvé")
+
+    duel_id = await create_friend_duel(
+        challenger_id=invite["challenger_id"],
+        challenger_username=invite["challenger_username"],
+        challenger_elo=challenger.get("elo_online", 1000),
+        challenger_grade=challenger.get("grade", 6),
+        challenged_id=current_user["id"],
+        challenged_username=current_user["username"],
+        challenged_elo=current_user.get("elo_online", 1000),
+        challenged_grade=current_user.get("grade", 6),
+        mode=invite["mode"],
+        db=db
+    )
+
+    return {"duel_id": duel_id, "message": "Duel commencé !"}
+
+@api_router.post("/friend-duels/{invite_id}/decline")
+async def decline_friend_duel(
+    invite_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    invite = await db.friend_duel_invites.find_one({"id": invite_id})
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invitation non trouvée")
+    if invite["challenged_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Non autorisé")
+
+    await db.friend_duel_invites.update_one(
+        {"id": invite_id}, {"$set": {"status": "declined"}}
+    )
+
+    # Notifie le challenger
+    await send_friend_duel(invite["challenger_id"], {
+        "type": "duel_declined",
+        "by": current_user["username"],
+    })
+
+    return {"message": "Invitation refusée"}
+
+@api_router.get("/friend-duels/pending")
+async def get_pending_duels(current_user: dict = Depends(get_current_user)):
+    invites = await db.friend_duel_invites.find({
+        "challenged_id": current_user["id"],
+        "status": "pending",
+    }).to_list(20)
+
+    result = []
+    for inv in invites:
+        clean_doc(inv)
+        if isinstance(inv.get("created_at"), datetime):
+            inv["created_at"] = inv["created_at"].isoformat()
+        result.append(inv)
+    return {"invites": result}
 
 app.include_router(api_router)
 app.add_middleware(
