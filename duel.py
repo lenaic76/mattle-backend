@@ -55,7 +55,7 @@ def create_bot(elo: int) -> dict:
         "score": 0,
     }
 
-async def bot_answer(match_id: str, bot_id: str, correct_answer: float):
+async def bot_answer(match_id: str, bot_id: str, correct_answer: float, db=None):
     """Simule la réponse du bot après un délai aléatoire"""
     # Bot répond entre 2 et 6 secondes
     delay = random.uniform(2.0, 6.0)
@@ -65,10 +65,10 @@ async def bot_answer(match_id: str, bot_id: str, correct_answer: float):
         match = active_matches[match_id]
         # Bot a 75% de chance de répondre correctement
         if random.random() < 0.75:
-            await process_answer(match_id, bot_id, correct_answer, is_bot=True)
+            await process_answer(match_id, bot_id, correct_answer, is_bot=True, db=db)
         else:
             wrong = correct_answer + random.randint(1, 5)
-            await process_answer(match_id, bot_id, wrong, is_bot=True)
+            await process_answer(match_id, bot_id, wrong, is_bot=True, db=db)
 
 # ==================== LOGIQUE DU MATCH ====================
 
@@ -89,7 +89,7 @@ async def send_to_player(user_id: str, message: dict):
         except Exception:
             pass
 
-async def start_round(match_id: str):
+async def start_round(match_id: str, db=None):
     """Démarre un nouveau round"""
     if match_id not in active_matches:
         return
@@ -98,7 +98,7 @@ async def start_round(match_id: str):
     match["current_round"] += 1
     
     if match["current_round"] > match["total_rounds"]:
-        await end_match(match_id)
+        await end_match(match_id, db)
         return
     
     grade1 = match["player1"].get("grade", 6)
@@ -132,10 +132,10 @@ async def start_round(match_id: str):
     # Si joueur 2 est un bot, lance sa réponse automatique
     if match["player2"].get("is_bot"):
         asyncio.create_task(
-            bot_answer(match_id, match["player2"]["user_id"], problem["answer"])
+            bot_answer(match_id, match["player2"]["user_id"], problem["answer"], db=db)
         )
 
-async def process_answer(match_id: str, user_id: str, answer: float, is_bot: bool = False):
+async def process_answer(match_id: str, user_id: str, answer: float, is_bot: bool = False, db=None):
     """Traite la réponse d'un joueur"""
     if match_id not in active_matches:
         return
@@ -176,9 +176,9 @@ async def process_answer(match_id: str, user_id: str, answer: float, is_bot: boo
     # Si les deux ont répondu ou si c'est correct → passe au round suivant
     if is_correct or len(match["round_answered"]) >= 2:
         await asyncio.sleep(2)
-        await start_round(match_id)
+        await start_round(match_id, db)
 
-async def end_match(match_id: str):
+async def end_match(match_id: str, db=None):
     """Termine le match et calcule l'Elo"""
     if match_id not in active_matches:
         return
@@ -230,6 +230,15 @@ async def end_match(match_id: str):
         
         # Stocke le changement d'Elo à appliquer
         match[f"elo_change_{player['user_id']}"] = elo_change
+
+        # Met à jour elo_online directement en base
+        user_doc = await db.users.find_one({"id": player["user_id"]})
+        if user_doc:
+            new_elo_online = max(100, user_doc.get("elo_online", 1000) + elo_change)
+            await db.users.update_one(
+                {"id": player["user_id"]},
+                {"$set": {"elo_online": new_elo_online}}
+            )
     
     match["status"] = "finished"
 
@@ -291,7 +300,7 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
         
         # Lance le premier round après 3 secondes
         await asyncio.sleep(3)
-        await start_round(match_id)
+        await start_round(match_id, db)
         
     else:
         # Pas d'adversaire → attend 10 secondes puis crée un bot
@@ -346,6 +355,6 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
             })
             
             await asyncio.sleep(3)
-            await start_round(match_id)
+            await start_round(match_id, db)
     
     return match_id if 'match_id' in locals() else None
