@@ -18,33 +18,29 @@ connections: Dict[str, WebSocket] = {}
 
 # ==================== GÉNÉRATEUR DE PROBLÈMES ====================
 
-def generate_duel_problem() -> dict:
-    """Génère un problème aléatoire pour le duel"""
-    problems = [
-        # Calcul rapide
-        {"question": f"{random.randint(10,50)} + {random.randint(10,50)} = ?",
-         "answer": None, "type": "calcul"},
-        {"question": f"{random.randint(2,12)} × {random.randint(2,12)} = ?",
-         "answer": None, "type": "calcul"},
-        {"question": f"{random.randint(20,100)} - {random.randint(1,20)} = ?",
-         "answer": None, "type": "calcul"},
-    ]
-    prob = random.choice(problems)
-    
-    # Calcule la réponse
-    parts = prob["question"].replace(" = ?", "").split()
-    if "+" in parts:
-        idx = parts.index("+")
-        prob["answer"] = float(int(parts[idx-1]) + int(parts[idx+1]))
-    elif "×" in parts:
-        idx = parts.index("×")
-        prob["answer"] = float(int(parts[idx-1]) * int(parts[idx+1]))
-    elif "-" in parts:
-        idx = parts.index("-")
-        prob["answer"] = float(int(parts[idx-1]) - int(parts[idx+1]))
-    
-    prob["id"] = str(uuid.uuid4())
-    return prob
+def generate_duel_problem(grade: int = 6, elo: int = 1000) -> dict:
+    """Génère un problème adapté au niveau et à l'Elo du joueur"""
+    from problem_generators import get_problem_data
+    import uuid
+
+    # Difficulté selon l'Elo
+    if elo < 900: difficulty = 1
+    elif elo < 1100: difficulty = 2
+    elif elo < 1300: difficulty = 3
+    elif elo < 1500: difficulty = 4
+    else: difficulty = 5
+
+    categories = ["calcul", "algebre", "geometrie"]
+    category = random.choice(categories)
+    data = get_problem_data(category, difficulty, grade)
+
+    return {
+        "id": str(uuid.uuid4()),
+        "question": data["question"],
+        "answer": data["answer"],
+        "type": category,
+        "difficulty": difficulty,
+    }
 
 # ==================== BOT ====================
 
@@ -105,7 +101,12 @@ async def start_round(match_id: str):
         await end_match(match_id)
         return
     
-    problem = generate_duel_problem()
+    grade1 = match["player1"].get("grade", 6)
+    grade2 = match["player2"].get("grade", 6)
+    # Même grade garanti par le matchmaking mais on prend le min par sécurité
+    min_grade = min(grade1, grade2)
+    avg_elo = (match["player1"]["elo_online"] + match["player2"]["elo_online"]) // 2
+    problem = generate_duel_problem(grade=min_grade, elo=avg_elo)
     match["current_problem"] = problem
     match["round_answered"] = set()
     match["round_start_time"] = datetime.utcnow().timestamp()
@@ -234,7 +235,7 @@ async def end_match(match_id: str):
 
 # ==================== MATCHMAKING ====================
 
-async def find_match(user_id: str, username: str, elo_online: int, websocket: WebSocket, db):
+async def find_match(user_id: str, username: str, elo_online: int, websocket: WebSocket, db, grade: int = 6):
     """Cherche un adversaire ou crée un bot"""
     connections[user_id] = websocket
     
@@ -242,7 +243,8 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
     opponent_id = None
     for waiting_id, waiting_data in waiting_queue.items():
         elo_diff = abs(waiting_data["elo_online"] - elo_online)
-        if elo_diff <= 300:
+        same_grade = waiting_data.get("grade", 6) == grade
+        if elo_diff <= 300 and same_grade:
             opponent_id = waiting_id
             break
     
@@ -257,6 +259,7 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
                 "user_id": opponent_id,
                 "username": opponent_data["username"],
                 "elo_online": opponent_data["elo_online"],
+                "grade": opponent_data.get("grade", 6),
                 "score": 0,
                 "is_bot": False,
             },
@@ -264,6 +267,7 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
                 "user_id": user_id,
                 "username": username,
                 "elo_online": elo_online,
+                "grade": grade,
                 "score": 0,
                 "is_bot": False,
             },
@@ -294,6 +298,7 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
         waiting_queue[user_id] = {
             "username": username,
             "elo_online": elo_online,
+            "grade": grade,
             "websocket": websocket,
         }
         
@@ -319,6 +324,7 @@ async def find_match(user_id: str, username: str, elo_online: int, websocket: We
                     "user_id": user_id,
                     "username": username,
                     "elo_online": elo_online,
+                    "grade": grade,
                     "score": 0,
                     "is_bot": False,
                 },

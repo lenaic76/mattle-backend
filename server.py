@@ -1294,7 +1294,11 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
         player_data = json.loads(data)
         username = player_data.get("username")
         elo_online = player_data.get("elo_online", 1000)
-        asyncio.create_task(find_match(user_id, username, elo_online, websocket, db))
+        user_doc = await db.users.find_one({"id": user_id})
+        user_grade = user_doc.get("grade", 6) if user_doc else 6
+        asyncio.create_task(
+            find_match(user_id, username, elo_online, websocket, db, grade=user_grade)
+        )
         while True:
             message = await websocket.receive_text()
             msg_data = json.loads(message)
@@ -1310,7 +1314,12 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
                             user = await db.users.find_one({"id": user_id})
                             if user:
                                 new_elo_online = max(100, user.get("elo_online", 1000) + elo_change)
-                                await db.users.update_one({"id": user_id}, {"$set": {"elo_online": new_elo_online}})
+                                await db.users.update_one(
+                                    {"id": user_id},
+                                    {"$set": {"elo_online": new_elo_online}}
+                                )
+                            # Supprime la clé pour éviter la double mise à jour
+                            del match[elo_change_key]
                     else:
                         await process_answer(match_id, user_id, answer)
             elif msg_data.get("type") == "cancel_search":
