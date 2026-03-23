@@ -1321,7 +1321,7 @@ async def duel_websocket(websocket: WebSocket, user_id: str):
                             # Supprime la clé pour éviter la double mise à jour
                             del match[elo_change_key]
                     else:
-                        await process_answer(match_id, user_id, answer)
+                        await process_answer(match_id, user_id, answer, db=db)
             elif msg_data.get("type") == "cancel_search":
                 if user_id in waiting_queue:
                     waiting_queue.pop(user_id)
