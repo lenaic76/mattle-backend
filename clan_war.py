@@ -364,6 +364,21 @@ async def war_end_timer(war_id: str, db):
     await asyncio.sleep(WAR_DURATION_HOURS * 3600)
     await end_war(war_id, db)
 
+# Calcul des pièces selon l'écart de score
+async def calculate_war_coins(clan_score: int, opponent_score: int, result: str) -> int:
+    if result != "victory":
+        return 0
+    total = clan_score + opponent_score
+    if total == 0:
+        return 50
+    win_ratio = clan_score / total
+    if win_ratio > 0.75:  # Victoire écrasante (>75% des points)
+        return 100
+    elif win_ratio > 0.6:  # Victoire normale (60-75%)
+        return 75
+    else:  # Victoire serrée (<60%)
+        return 50
+
 async def end_war(war_id: str, db):
     """Termine la guerre et calcule les résultats"""
     if war_id not in active_wars:
@@ -441,6 +456,25 @@ async def end_war(war_id: str, db):
                 }
             }}
         )
+    # Distribue les pièces aux membres du clan gagnant
+    coins_per_member1 = await calculate_war_coins(clan1_score, clan2_score, result_clan1)
+    coins_per_member2 = await calculate_war_coins(clan2_score, clan1_score, result_clan2)
+
+    # Clan 1
+    if coins_per_member1 > 0:
+        for member_id in war["clan1"]["war_members"]:
+            await db.users.update_one(
+                {"id": member_id},
+                {"$inc": {"coins": coins_per_member1}}
+            )
+
+    # Clan 2
+    if coins_per_member2 > 0:
+        for member_id in war["clan2"]["war_members"]:
+            await db.users.update_one(
+                {"id": member_id},
+                {"$inc": {"coins": coins_per_member2}}
+            )
 
     # Met à jour la guerre en base
     await db.clan_wars.update_one(
@@ -462,6 +496,7 @@ async def end_war(war_id: str, db):
             "your_score": clan1_score,
             "opponent_score": clan2_score,
             "genius_change": genius_gain1,
+            "coins_earned": coins_per_member1,
         })
     for member_id in war["clan2"]["war_members"]:
         await send_war(member_id, {
@@ -470,6 +505,7 @@ async def end_war(war_id: str, db):
             "your_score": clan2_score,
             "opponent_score": clan1_score,
             "genius_change": genius_gain2,
+            "coins_earned": coins_per_member2,
         })
 
     active_wars.pop(war_id, None)

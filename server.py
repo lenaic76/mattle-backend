@@ -73,7 +73,7 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: str
-    elo: int
+    coins: int
     elo_online: int
     grade: int
     role: str
@@ -99,8 +99,8 @@ class AnswerResponse(BaseModel):
     correct: bool
     correct_answer: float
     explanation: str
-    elo_change: int
-    new_elo: int
+    coins_earned: int
+    new_coins: int
 
 class LeaderboardEntry(BaseModel):
     rank: int
@@ -325,7 +325,7 @@ async def register(user_data: UserCreate):
         "username": user_data.username,
         "email": user_data.email,
         "password_hash": hash_password(user_data.password),
-        "elo": 1000,
+        "coins": 0,
         "elo_online": 1000,
         "grade": user_data.grade,
         "role": user_data.role,
@@ -348,9 +348,10 @@ async def register(user_data: UserCreate):
         access_token=token,
         user=UserResponse(
             id=user_id, username=user_data.username, email=user_data.email,
-            elo=1000, elo_online=1000, grade=user_data.grade,
+            coins=0, elo_online=1000, grade=user_data.grade,
             role=user_data.role, problems_solved=0,
             correct_answers=0, streak_days=0, last_daily_date=None,
+            clan_id=None, clan_rank=None,
             created_at=user["created_at"],
         )
     )
@@ -362,26 +363,27 @@ async def login(credentials: UserLogin):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     token = create_access_token({"sub": user["id"]})
     return TokenResponse(
-    access_token=token,
-    user=UserResponse(
-        id=user["id"], username=user["username"], email=user["email"],
-        elo=user["elo"], elo_online=user.get("elo_online", 1000),
-        grade=user["grade"], role=user.get("role", "student"),
-        problems_solved=user["problems_solved"],
-        correct_answers=user["correct_answers"],
-        streak_days=user["streak_days"],
-        last_daily_date=user.get("last_daily_date"),
-        clan_id=user.get("clan_id"),
-        clan_rank=user.get("clan_rank"),
-        created_at=user["created_at"],
+        access_token=token,
+        user=UserResponse(
+            id=user["id"], username=user["username"], email=user["email"],
+            coins=user.get("coins", 0), elo_online=user.get("elo_online", 1000),
+            grade=user["grade"], role=user.get("role", "student"),
+            problems_solved=user["problems_solved"],
+            correct_answers=user["correct_answers"],
+            streak_days=user["streak_days"],
+            last_daily_date=user.get("last_daily_date"),
+            clan_id=user.get("clan_id"),
+            clan_rank=user.get("clan_rank"),
+            created_at=user["created_at"],
+        )
     )
-)
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
     return UserResponse(
         id=current_user["id"], username=current_user["username"],
-        email=current_user["email"], elo=current_user["elo"],
+        email=current_user["email"],
+        coins=current_user.get("coins", 0),
         elo_online=current_user.get("elo_online", 1000),
         grade=current_user["grade"], role=current_user.get("role", "student"),
         problems_solved=current_user["problems_solved"],
@@ -481,20 +483,28 @@ async def submit_answer(
         elo_history.append({"date": today, "elo": new_elo})
     else:
         elo_history[-1]["elo"] = new_elo
+    # Calcul des pièces gagnées (entraînement)
+    coins_earned = 0
+    if is_correct:
+        coins_earned = 2 * problem.get("difficulty", 1)
+
+    new_coins = current_user.get("coins", 0) + coins_earned
+
     update_data = {
-        "elo": new_elo,
+        "coins": new_coins,
         "problems_solved": current_user["problems_solved"] + 1,
         "category_stats": cat_stats,
-        "elo_history": elo_history[-30:],
     }
     if is_correct:
         update_data["correct_answers"] = current_user["correct_answers"] + 1
     await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
-    return AnswerResponse(
-        correct=is_correct, correct_answer=problem["answer"],
-        explanation=problem.get("explanation", ""),
-        elo_change=elo_change, new_elo=new_elo,
-    )
+    return {
+        "correct": is_correct,
+        "correct_answer": problem["answer"],
+        "explanation": problem.get("explanation", ""),
+        "coins_earned": coins_earned,
+        "new_coins": new_coins,
+    }
 
 # ==================== DAILY ====================
 
@@ -574,13 +584,29 @@ async def submit_daily_answer(
         elo_history.append({"date": today_history, "elo": new_elo})
     else:
         elo_history[-1]["elo"] = new_elo
+    # Calcul des pièces (défi quotidien = x3 vs entraînement)
+    coins_earned = 0
+    if is_correct:
+        problem_difficulty = problem.get("difficulty", 1)
+        if is_riddle:
+            coins_earned = 15  # Énigme = 15 pièces fixes
+        else:
+            coins_earned = 3 * problem_difficulty
+
+    # Bonus si tout le défi est complété
+    all_problems = daily_cache.get("problems", [])
+    completed = user_daily.get("completed_problems", [])
+    if len(completed) == len(all_problems) and user_daily.get("riddle_completed"):
+        coins_earned += 20  # Bonus complétion
+
+    new_coins = current_user.get("coins", 0) + coins_earned
+
     update_data = {
-        "elo": new_elo,
+        "coins": new_coins,
         "last_daily_date": today,
         "streak_days": new_streak,
         "best_streak": max(current_user.get("best_streak", 0), new_streak),
         "problems_solved": current_user["problems_solved"] + 1,
-        "elo_history": elo_history[-30:],
     }
     if is_correct:
         update_data["correct_answers"] = current_user["correct_answers"] + 1
@@ -593,8 +619,8 @@ async def submit_daily_answer(
         "correct": is_correct,
         "correct_answer": problem["answer"],
         "explanation": problem.get("explanation", ""),
-        "elo_change": elo_change,
-        "new_elo": new_elo,
+        "coins_earned": coins_earned,
+        "new_coins": new_coins,
         "streak": new_streak,
     }
 
