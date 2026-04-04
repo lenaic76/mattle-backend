@@ -1,6 +1,20 @@
 import random
 import math
+# =========================================================
+# UTILITAIRES 4ÈME
+# =========================================================
 
+def choix_signe(n):
+    return n if random.choice([True, False]) else -n
+
+def pgcd(a, b):
+    while b:
+        a, b = b, a % b
+    return a
+
+def simplifier(num, den):
+    g = pgcd(abs(num), abs(den))
+    return num // g, den // g
 # ================================================================
 # CALCUL
 # ================================================================
@@ -43,9 +57,246 @@ def generate_calcul_5eme(difficulty: int) -> dict:
     """Calcul niveau 5ème — À personnaliser"""
     return generate_calcul_6eme(difficulty)
 
+# =========================================================
+# CALCUL 4ÈME
+# Chapitres : nombres relatifs, fractions, puissances,
+#             pourcentages, racines carrées, priorités
+# =========================================================
+
 def generate_calcul_4eme(difficulty: int) -> dict:
-    """Calcul niveau 4ème — À personnaliser"""
-    return generate_calcul_6eme(difficulty)
+
+    if difficulty == 1:
+        # Nombres relatifs — addition/soustraction simples
+        a = _choix_signe(random.randint(1, 45))
+        b = _choix_signe(random.randint(11, 45))
+        op = random.choice(['+', '-'])
+        import random
+
+def generate_calcul_4eme(difficulty: int) -> dict:
+
+    if difficulty == 1:
+        # Nombres relatifs — addition/soustraction avec 2 opérations
+        a = _choix_signe(random.randint(10, 49))
+        b = _choix_signe(random.randint(-15, 15))
+        c = _choix_signe(random.randint(-25, 25))
+
+        op1, op2 = random.choice([('+', '+'), ('+', '-'), ('-', '+'), ('-', '-')])
+
+        # Construction de l'expression et du résultat
+        if op1 == '+':
+            temp = a + b
+        else:
+            temp = a - b
+
+        if op2 == '+':
+            result = temp + c
+        else:
+            result = temp - c
+
+        question = f"Calculer : ({a}) {op1} ({b}) {op2} ({c})"
+
+        return {
+            "question": question,
+            "answer": float(result),
+            "hint": "Attention aux signes et calcule étape par étape !",
+            "explanation": f"({a}) {op1} ({b}) = {temp}, puis {temp} {op2} ({c}) = {result}"
+        }
+
+    elif difficulty == 2:
+        # Fractions — addition/soustraction même dénominateur ou simple
+        choix = random.choice(['fraction_add', 'relatifs_mult', 'pourcentage_simple'])
+
+        if choix == 'fraction_add':
+            den = random.randint(2, 12)
+            a = random.randint(1, den - 1)
+            b = random.randint(1, den - 1)
+            op = random.choice(['+', '-'])
+            num_res = a + b if op == '+' else a - b
+            n, d = _simplifier(num_res, den)
+            return {
+                "question": f"Calculer : {a}/{den} {op} {b}/{den} (donner le résultat simplifié sous forme a/b ou entier)",
+                "answer": round(num_res / den, 4),
+                "hint": "Même dénominateur → on additionne les numérateurs",
+                "explanation": f"{a}/{den} {op} {b}/{den} = {num_res}/{den} = {n}/{d}"
+            }
+        elif choix == 'relatifs_mult':
+            a = _choix_signe(random.randint(2, 12))
+            b = _choix_signe(random.randint(2, 12))
+            return {
+                "question": f"Calculer : ({a}) × ({b})",
+                "answer": float(a * b),
+                "hint": "Deux signes identiques → résultat positif",
+                "explanation": f"({a}) × ({b}) = {a * b}"
+            }
+        else:
+            prix = random.randint(20, 200)
+            taux = random.choice([10, 20, 25, 50])
+            val = prix * taux // 100
+            return {
+                "question": f"Calculer {taux}% de {prix}",
+                "answer": float(val),
+                "hint": f"Multiplier par {taux}/100",
+                "explanation": f"{taux}% de {prix} = {prix} × {taux}/100 = {val}"
+            }
+
+    elif difficulty == 3:
+        # Fractions dénominateurs différents, puissances, pourcentages
+        choix = random.choice(['fraction_diff', 'puissance', 'pourcentage_reduction'])
+
+        if choix == 'fraction_diff':
+            a = random.randint(1, 8)
+            b = random.randint(2, 9)
+            c = random.randint(1, 8)
+            d = random.randint(2, 9)
+            while b == d:
+                d = random.randint(2, 9)
+            op = random.choice(['+', '-'])
+            num = a * d + c * b if op == '+' else a * d - c * b
+            den = b * d
+            n, denom = _simplifier(num, den)
+            return {
+                "question": f"Calculer : {a}/{b} {op} {c}/{d} (arrondi 0.01)",
+                "answer": round(num / den, 2),
+                "hint": "Trouver le dénominateur commun",
+                "explanation": f"{a}/{b} {op} {c}/{d} = {num}/{den} ≈ {round(num/den, 2)}"
+            }
+        elif choix == 'puissance':
+            a = random.randint(2, 7)
+            n = random.randint(2, 4)
+            m = random.randint(2, 4)
+            type_p = random.choice(['produit', 'quotient'])
+            if type_p == 'produit':
+                return {
+                    "question": f"Simplifier : {a}^{n} × {a}^{m} = {a}^?",
+                    "answer": float(n + m),
+                    "hint": f"a^n × a^m = a^(n+m)",
+                    "explanation": f"{a}^{n} × {a}^{m} = {a}^{n+m}"
+                }
+            else:
+                big = max(n, m)
+                small = min(n, m)
+                return {
+                    "question": f"Simplifier : {a}^{big} ÷ {a}^{small} = {a}^?",
+                    "answer": float(big - small),
+                    "hint": "a^n ÷ a^m = a^(n-m)",
+                    "explanation": f"{a}^{big} ÷ {a}^{small} = {a}^{big - small}"
+                }
+        else:
+            prix = random.randint(50, 300)
+            taux = random.choice([5, 15, 20, 30])
+            reduction = round(prix * taux / 100, 2)
+            nouveau = round(prix - reduction, 2)
+            return {
+                "question": f"Un article coûte {prix}€. Après une réduction de {taux}%, quel est son nouveau prix ?",
+                "answer": nouveau,
+                "hint": f"Nouveau prix = {prix} × (1 - {taux}/100)",
+                "explanation": f"Réduction = {prix} × {taux}/100 = {reduction}€ → Nouveau prix = {prix} - {reduction} = {nouveau}€"
+            }
+
+    elif difficulty == 4:
+        # Racines carrées, priorités, fractions × ÷, puissances négatives
+        choix = random.choice(['racine', 'fraction_mult', 'priorites', 'puissance_neg'])
+
+        if choix == 'racine':
+            carres = [4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169]
+            c = random.choice(carres)
+            mult = random.randint(2, 5)
+            val = c * mult * mult
+            return {
+                "question": f"Calculer : √{val}",
+                "answer": float(_math.sqrt(val)),
+                "hint": f"√{val} = √({c} × {mult}²) = √{c} × {mult}",
+                "explanation": f"√{val} = {int(_math.sqrt(val))}"
+            }
+        elif choix == 'fraction_mult':
+            a = random.randint(1, 8)
+            b = random.randint(2, 9)
+            c = random.randint(1, 8)
+            d = random.randint(2, 9)
+            op = random.choice(['×', '÷'])
+            if op == '×':
+                num, den = a * c, b * d
+                n, denom = _simplifier(num, den)
+                return {
+                    "question": f"Calculer : ({a}/{b}) × ({c}/{d}) (arrondi 0.01)",
+                    "answer": round((a * c) / (b * d), 2),
+                    "hint": "Multiplier numérateurs entre eux et dénominateurs entre eux",
+                    "explanation": f"({a}/{b}) × ({c}/{d}) = {a*c}/{b*d} = {n}/{denom} ≈ {round(n/denom, 2)}"
+                }
+            else:
+                num, den = a * d, b * c
+                n, denom = _simplifier(num, den)
+                return {
+                    "question": f"Calculer : ({a}/{b}) ÷ ({c}/{d}) (arrondi 0.01)",
+                    "answer": round((a * d) / (b * c), 2),
+                    "hint": "Diviser par une fraction = multiplier par son inverse",
+                    "explanation": f"({a}/{b}) ÷ ({c}/{d}) = ({a}/{b}) × ({d}/{c}) = {a*d}/{b*c} ≈ {round(a*d/(b*c), 2)}"
+                }
+        elif choix == 'priorites':
+            a = random.randint(2, 8)
+            b = random.randint(2, 8)
+            c = random.randint(2, 8)
+            d = random.randint(1, 6)
+            res = a + b * c - d
+            return {
+                "question": f"Calculer en respectant les priorités : {a} + {b} × {c} - {d}",
+                "answer": float(res),
+                "hint": "La multiplication s'effectue avant l'addition",
+                "explanation": f"{a} + {b} × {c} - {d} = {a} + {b*c} - {d} = {res}"
+            }
+        else:
+            a = random.randint(2, 5)
+            n = random.randint(1, 3)
+            return {
+                "question": f"Calculer : {a}^(-{n}) (arrondi 0.01)",
+                "answer": round(1 / (a ** n), 4),
+                "hint": f"a^(-n) = 1/a^n",
+                "explanation": f"{a}^(-{n}) = 1/{a}^{n} = 1/{a**n} ≈ {round(1/(a**n), 4)}"
+            }
+
+    else:  # difficulty == 5
+        # Calculs complexes combinés
+        choix = random.choice(['expression_complete', 'fraction_complexe', 'puissance_fraction'])
+
+        if choix == 'expression_complete':
+            a = _choix_signe(random.randint(2, 8))
+            b = _choix_signe(random.randint(2, 8))
+            c = random.randint(2, 6)
+            d = random.randint(1, 5)
+            res = round(a * b + c ** 2 - d, 2)
+            return {
+                "question": f"Calculer : ({a}) × ({b}) + {c}² - {d}",
+                "answer": float(res),
+                "hint": "Calcule d'abord la puissance et la multiplication",
+                "explanation": f"({a}) × ({b}) + {c}² - {d} = {a*b} + {c**2} - {d} = {res}"
+            }
+        elif choix == 'fraction_complexe':
+            a = random.randint(1, 6)
+            b = random.randint(2, 8)
+            c = random.randint(1, 6)
+            d = random.randint(2, 8)
+            e = random.randint(1, 6)
+            f = random.randint(2, 8)
+            res = round(a/b + c/d - e/f, 4)
+            return {
+                "question": f"Calculer : {a}/{b} + {c}/{d} - {e}/{f} (arrondi 0.01)",
+                "answer": round(res, 2),
+                "hint": "Trouve le dénominateur commun aux 3 fractions",
+                "explanation": f"{a}/{b} + {c}/{d} - {e}/{f} ≈ {round(res, 2)}"
+            }
+        else:
+            a = random.randint(2, 5)
+            b = random.randint(2, 4)
+            c = random.randint(2, 4)
+            num = a ** b
+            den = a ** c
+            exp = b - c
+            return {
+                "question": f"Simplifier : {a}^{b} / {a}^{c} et donner le résultat décimal (arrondi 0.01)",
+                "answer": round(num / den, 2),
+                "hint": "a^n / a^m = a^(n-m)",
+                "explanation": f"{a}^{b} / {a}^{c} = {a}^{b-c} = {a}^{exp} = {round(num/den, 2)}"
+            }
 
 def generate_calcul_3eme(difficulty: int) -> dict:
     """Calcul niveau 3ème — À personnaliser"""
@@ -88,9 +339,134 @@ def generate_algebre_5eme(difficulty: int) -> dict:
     """Algèbre niveau 5ème — À personnaliser"""
     return generate_algebre_6eme(difficulty)
 
+# =========================================================
+# ALGÈBRE 4ÈME
+# Chapitres : développement, factorisation, équations,
+#             identités remarquables, systèmes
+# =========================================================
+
 def generate_algebre_4eme(difficulty: int) -> dict:
-    """Algèbre niveau 4ème — À personnaliser"""
-    return generate_algebre_6eme(difficulty)
+    import random
+
+    if difficulty == 1:
+        # Calcul littéral — réduction d'expressions simples
+        a = random.randint(2, 9)
+        b = random.randint(1, 10)
+        c = random.randint(2, 9)
+        d = random.randint(1, 10)
+        coeff = a + c
+        cst = b - d
+        return {
+            "question": f"Réduire : {a}x + {b} + {c}x - {d}",
+            "answer": float(coeff),
+            "hint": "Regroupe les termes en x ensemble et les constantes ensemble",
+            "explanation": f"{a}x + {c}x + {b} - {d} = {coeff}x + {cst} → le coefficient de x est {coeff}"
+        }
+
+    elif difficulty == 2:
+        # Développement simple k(ax + b)
+        k = random.randint(2, 8)
+        a = random.randint(1, 9)
+        b = _choix_signe(random.randint(1, 9))
+        ka = k * a
+        kb = k * b
+        return {
+            "question": f"Développer : {k}({a}x + ({b}))",
+            "answer": float(ka),
+            "hint": "Multiplier chaque terme de la parenthèse par le facteur extérieur",
+            "explanation": f"{k}({a}x + ({b})) = {ka}x + {kb} → le coefficient de x est {ka}"
+        }
+
+    elif difficulty == 3:
+        # Équations du premier degré
+        x_val = random.randint(-8, 8)
+        a = random.randint(2, 8)
+        b = _choix_signe(random.randint(1, 15))
+        c = a * x_val + b
+        return {
+            "question": f"Résoudre : {a}x + ({b}) = {c}  → x = ?",
+            "answer": float(x_val),
+            "hint": "Isole x en soustrayant la constante puis en divisant par le coefficient",
+            "explanation": f"{a}x = {c} - ({b}) = {c - b} → x = {c - b}/{a} = {x_val}"
+        }
+
+    elif difficulty == 4:
+        # Identités remarquables ou factorisation
+        choix = random.choice(['identite_carree', 'factorisation', 'equation_2membres'])
+
+        if choix == 'identite_carree':
+            a = random.randint(2, 8)
+            b = random.randint(1, 8)
+            # (ax + b)² = a²x² + 2abx + b²
+            a2 = a ** 2
+            deux_ab = 2 * a * b
+            b2 = b ** 2
+            return {
+                "question": f"Développer : ({a}x + {b})²  → coefficient de x = ?",
+                "answer": float(deux_ab),
+                "hint": "(a+b)² = a² + 2ab + b²",
+                "explanation": f"({a}x + {b})² = {a2}x² + {deux_ab}x + {b2} → coefficient de x = {deux_ab}"
+            }
+        elif choix == 'factorisation':
+            a = random.randint(2, 6)
+            b = random.randint(2, 6)
+            # a²-b² = (a-b)(a+b)
+            diff = a ** 2 - b ** 2
+            return {
+                "question": f"Factoriser : {a**2}x² - {b**2}  (identité remarquable a²-b²) → donner (ax-b), le coefficient de x dans le premier facteur = ?",
+                "answer": float(a),
+                "hint": "a² - b² = (a-b)(a+b)",
+                "explanation": f"{a**2}x² - {b**2} = ({a}x - {b})({a}x + {b}) → coefficient de x = {a}"
+            }
+        else:
+            # Équation à 2 membres avec x des 2 côtés
+            x_val = random.randint(-5, 5)
+            a = random.randint(3, 8)
+            b = random.randint(1, 6)
+            c = random.randint(1, a - 1)
+            d = (a - c) * x_val + b
+            return {
+                "question": f"Résoudre : {a}x + {b} = {c}x + {d}  → x = ?",
+                "answer": float(x_val),
+                "hint": "Regroupe les x d'un côté et les constantes de l'autre",
+                "explanation": f"{a-c}x = {d-b} → x = {x_val}"
+            }
+
+    else:  # difficulty == 5
+        # Systèmes d'équations ou expressions complexes
+        choix = random.choice(['systeme', 'expression_algebrique'])
+
+        if choix == 'systeme':
+            x = random.randint(-4, 4)
+            y = random.randint(-4, 4)
+            a1 = random.randint(1, 4)
+            b1 = random.randint(1, 4)
+            c1 = a1 * x + b1 * y
+            a2 = random.randint(1, 4)
+            b2 = random.randint(1, 4)
+            while a1 * b2 == a2 * b1:
+                b2 = random.randint(1, 4)
+            c2 = a2 * x + b2 * y
+            return {
+                "question": (
+                    f"Système : {a1}x + {b1}y = {c1} et {a2}x + {b2}y = {c2}\n"
+                    f"Trouver x (entier)"
+                ),
+                "answer": float(x),
+                "hint": "Utilise la méthode par substitution ou par combinaison",
+                "explanation": f"La solution est x = {x}, y = {y}"
+            }
+        else:
+            a = random.randint(2, 6)
+            b = random.randint(1, 5)
+            # Développer (ax+b)(ax-b) = a²x²-b²
+            res = a ** 2 - b ** 2
+            return {
+                "question": f"Développer et simplifier : ({a}x + {b})({a}x - {b}) pour x=1 → résultat = ?",
+                "answer": float(res),
+                "hint": "(a+b)(a-b) = a² - b²",
+                "explanation": f"({a}x+{b})({a}x-{b}) = {a**2}x²-{b**2} → pour x=1 : {a**2}-{b**2} = {res}"
+            }
 
 def generate_algebre_3eme(difficulty: int) -> dict:
     """Algèbre niveau 3ème — À personnaliser"""
@@ -149,9 +525,181 @@ def generate_geometrie_5eme(difficulty: int) -> dict:
     """Géométrie niveau 5ème — À personnaliser"""
     return generate_geometrie_6eme(difficulty)
 
+# =========================================================
+# GÉOMÉTRIE 4ÈME
+# Chapitres : Pythagore, Thalès, trigonométrie intro,
+#             cercles, transformations, volumes
+# =========================================================
+
 def generate_geometrie_4eme(difficulty: int) -> dict:
-    """Géométrie niveau 4ème — À personnaliser"""
-    return generate_geometrie_6eme(difficulty)
+    import random, math
+
+    if difficulty == 1:
+        # Aires et périmètres simples
+        choix = random.choice(['rectangle', 'triangle', 'cercle_perim'])
+
+        if choix == 'rectangle':
+            L = random.randint(3, 15)
+            l = random.randint(2, 10)
+            choix2 = random.choice(['perimetre', 'aire'])
+            if choix2 == 'perimetre':
+                return {
+                    "question": f"Rectangle {L}cm × {l}cm. Périmètre (en cm) ?",
+                    "answer": float(2 * (L + l)),
+                    "hint": "P = 2×(L+l)",
+                    "explanation": f"P = 2×({L}+{l}) = {2*(L+l)} cm"
+                }
+            else:
+                return {
+                    "question": f"Rectangle {L}cm × {l}cm. Aire (en cm²) ?",
+                    "answer": float(L * l),
+                    "hint": "A = L×l",
+                    "explanation": f"A = {L}×{l} = {L*l} cm²"
+                }
+        elif choix == 'triangle':
+            b = random.randint(4, 14)
+            h = random.randint(3, 12)
+            return {
+                "question": f"Triangle base={b}cm hauteur={h}cm. Aire (en cm²) ?",
+                "answer": float((b * h) / 2),
+                "hint": "A = (base × hauteur) / 2",
+                "explanation": f"A = ({b}×{h})/2 = {(b*h)/2} cm²"
+            }
+        else:
+            r = random.randint(2, 10)
+            return {
+                "question": f"Cercle rayon={r}cm. Périmètre (π≈3.14, arrondi 0.01) ?",
+                "answer": round(2 * 3.14 * r, 2),
+                "hint": "P = 2×π×r",
+                "explanation": f"P = 2×3.14×{r} = {round(2*3.14*r, 2)} cm"
+            }
+
+    elif difficulty == 2:
+        # Pythagore — trouver l'hypoténuse ou un côté
+        triplets = [(3, 4, 5), (5, 12, 13), (6, 8, 10), (8, 15, 17), (7, 24, 25)]
+        a, b, c = random.choice(triplets)
+        choix = random.choice(['hypotenuse', 'cote'])
+
+        if choix == 'hypotenuse':
+            return {
+                "question": f"Triangle rectangle, côtés {a}cm et {b}cm. Hypoténuse (en cm) ?",
+                "answer": float(c),
+                "hint": "c² = a² + b²",
+                "explanation": f"c = √({a}²+{b}²) = √{a**2+b**2} = {c} cm"
+            }
+        else:
+            return {
+                "question": f"Triangle rectangle, hypoténuse {c}cm, un côté {a}cm. Autre côté (en cm) ?",
+                "answer": float(b),
+                "hint": "b² = c² - a²",
+                "explanation": f"b = √({c}²-{a}²) = √{c**2-a**2} = {b} cm"
+            }
+
+    elif difficulty == 3:
+        # Thalès ou volumes
+        choix = random.choice(['thales', 'volume_pave', 'volume_cylindre'])
+
+        if choix == 'thales':
+            AB = random.randint(4, 12)
+            AC = random.randint(4, 12)
+            k = random.choice([2, 3, 4])
+            AM = AB * k
+            AN = AC * k
+            return {
+                "question": (
+                    f"Droites parallèles. AB={AB}cm, AC={AC}cm, AM={AM}cm. "
+                    f"Calculer AN par le théorème de Thalès (en cm) ?"
+                ),
+                "answer": float(AN),
+                "hint": "AB/AM = AC/AN",
+                "explanation": f"AN = (AM × AC) / AB = ({AM}×{AC})/{AB} = {AN} cm"
+            }
+        elif choix == 'volume_pave':
+            L = random.randint(3, 12)
+            l = random.randint(2, 8)
+            h = random.randint(2, 8)
+            return {
+                "question": f"Pavé droit {L}cm × {l}cm × {h}cm. Volume (en cm³) ?",
+                "answer": float(L * l * h),
+                "hint": "V = L × l × h",
+                "explanation": f"V = {L}×{l}×{h} = {L*l*h} cm³"
+            }
+        else:
+            r = random.randint(2, 7)
+            h = random.randint(3, 12)
+            vol = round(3.14 * r ** 2 * h, 2)
+            return {
+                "question": f"Cylindre rayon={r}cm hauteur={h}cm. Volume (π≈3.14, arrondi 0.01) ?",
+                "answer": vol,
+                "hint": "V = π × r² × h",
+                "explanation": f"V = 3.14 × {r}² × {h} = {vol} cm³"
+            }
+
+    elif difficulty == 4:
+        # Trigonométrie intro (sin, cos, tan dans triangle rectangle)
+        angles = [30, 45, 60]
+        angle = random.choice(angles)
+        hyp = random.randint(5, 15)
+
+        sin_vals = {30: 0.5, 45: round(math.sqrt(2)/2, 4), 60: round(math.sqrt(3)/2, 4)}
+        cos_vals = {30: round(math.sqrt(3)/2, 4), 45: round(math.sqrt(2)/2, 4), 60: 0.5}
+
+        choix = random.choice(['sin', 'cos'])
+
+        if choix == 'sin':
+            cote_opp = round(hyp * sin_vals[angle], 2)
+            return {
+                "question": (
+                    f"Triangle rectangle. Angle={angle}°, hypoténuse={hyp}cm. "
+                    f"Côté opposé à l'angle (arrondi 0.01) ?"
+                ),
+                "answer": cote_opp,
+                "hint": f"sin({angle}°) = côté opposé / hypoténuse",
+                "explanation": f"côté opposé = {hyp} × sin({angle}°) = {hyp} × {sin_vals[angle]} = {cote_opp} cm"
+            }
+        else:
+            cote_adj = round(hyp * cos_vals[angle], 2)
+            return {
+                "question": (
+                    f"Triangle rectangle. Angle={angle}°, hypoténuse={hyp}cm. "
+                    f"Côté adjacent à l'angle (arrondi 0.01) ?"
+                ),
+                "answer": cote_adj,
+                "hint": f"cos({angle}°) = côté adjacent / hypoténuse",
+                "explanation": f"côté adjacent = {hyp} × cos({angle}°) = {hyp} × {cos_vals[angle]} = {cote_adj} cm"
+            }
+
+    else:  # difficulty == 5
+        # Problèmes combinés Pythagore + trigonométrie ou Thalès + aires
+        choix = random.choice(['pytha_trigo', 'thales_aire'])
+
+        if choix == 'pytha_trigo':
+            a = random.randint(3, 9)
+            b = random.randint(3, 9)
+            c = round(math.sqrt(a**2 + b**2), 2)
+            return {
+                "question": (
+                    f"Triangle rectangle côtés {a}cm et {b}cm. "
+                    f"Calculer l'hypoténuse (arrondi 0.01) ?"
+                ),
+                "answer": c,
+                "hint": "c = √(a²+b²)",
+                "explanation": f"c = √({a}²+{b}²) = √{a**2+b**2} ≈ {c} cm"
+            }
+        else:
+            r = random.randint(3, 9)
+            h = random.randint(4, 12)
+            # Volume cône = (1/3)πr²h
+            vol = round((1/3) * 3.14 * r**2 * h, 2)
+            return {
+                "question": (
+                    f"Cône rayon={r}cm hauteur={h}cm. "
+                    f"Volume (π≈3.14, arrondi 0.01) ?"
+                ),
+                "answer": vol,
+                "hint": "V = (1/3) × π × r² × h",
+                "explanation": f"V = (1/3) × 3.14 × {r}² × {h} = {vol} cm³"
+            }
 
 def generate_geometrie_3eme(difficulty: int) -> dict:
     """Géométrie niveau 3ème — À personnaliser"""
