@@ -122,15 +122,24 @@ def generate_calcul_4eme(difficulty: int) -> dict:
         elif choix == 'relatifs_mult':
             a = _choix_signe(random.randint(2, 12))
             b = _choix_signe(random.randint(2, 12))
-            return {
-                "question": f"Calculer : ({a}) × ({b})",
-                "answer": float(a * b),
+            c = _choix_signe(random.randint(2, 12))
+            if a*b<40:
+                return {
+                "question": f"Calculer : ({a}) × ({b}) × ({c})",
+                "answer": float(a * b * c),
                 "hint": "Deux signes identiques → résultat positif",
-                "explanation": f"({a}) × ({b}) = {a * b}"
+                "explanation": f"({a}) × ({b}) × ({c}) = {a * b * c}"
             }
+            else:
+                return {
+                    "question": f"Calculer : ({a}) × ({b})",
+                    "answer": float(a * b),
+                    "hint": "Deux signes identiques → résultat positif",
+                    "explanation": f"({a}) × ({b}) = {a * b}"
+                }
         else:
             prix = random.randint(20, 200)
-            taux = random.choice([10, 20, 25, 50])
+            taux = random.choice([10, 20, 25, 50, 75])
             val = prix * taux // 100
             return {
                 "question": f"Calculer {taux}% de {prix}",
