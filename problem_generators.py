@@ -36,17 +36,57 @@ def generate_calcul_6eme(difficulty: int) -> dict:
         return {"question": f"{a} × {b} = ?", "answer": float(a * b),
                 "explanation": f"La réponse est {a * b}", "hint": "Table de multiplication"}
     elif difficulty == 3:
-        a = random.randint(2, 12)
-        b = random.randint(2, 10)
-        return {"question": f"{a * b} ÷ {a} = ?", "answer": float(b),
-                "explanation": f"La réponse est {b}", "hint": "Division"}
+        exo_type = random.choice(["division", "decomposition"])
+
+        if exo_type == "division":
+            a = random.randint(2, 12)
+            b = random.randint(2, 10)
+
+            return {"question": f"{a * b} ÷ {a} = ?", "answer": float(b),
+                    "explanation": f"{a*b} ÷ {a} = {b}", "hint": "Division"}
+
+        elif exo_type == "decomposition":
+            n = random.randint(10000, 999999)
+            digits = list(str(n))
+            powers = [10 ** i for i in range(len(digits)-1, -1, -1)]
+
+            decomposition = " + ".join([f"({d} × {p})" for d, p in zip(digits, powers) if d != '0'])
+
+            return {"question": (
+                    "Voici un exemple de décomposition :\n"
+                    "23 256 = (2 × 10 000) + (3 × 1 000) + (2 × 100) + (5 × 10) + (6 × 1)\n\n"
+                    f"Décompose le nombre suivant de la même façon :\n{n}"),
+                    "answer": decomposition,
+                    "explanation": f"{n} = {decomposition}",
+                    "hint": "Chaque chiffre est une puissances de 10"}
     elif difficulty == 4:
-        n1, d1 = random.randint(1, 5), random.randint(2, 6)
-        n2, d2 = random.randint(1, 5), random.randint(2, 6)
-        answer = round((n1/d1) + (n2/d2), 2)
-        return {"question": f"{n1}/{d1} + {n2}/{d2} = ? (arrondi à 0.01)",
-                "answer": answer, "explanation": f"La réponse est {answer}",
-                "hint": "Trouve le dénominateur commun"}
+        exo_type = random.choice(["denominateur", "pourcentage", "conversion horaire"])
+
+        if exo_type == "denominateur":
+            n1, d1 = random.randint(1, 5), random.randint(2, 6)
+            n2, d2 = random.randint(1, 5), random.randint(2, 6)
+            answer = round((n1/d1) + (n2/d2), 2)
+            return {"question": f"{n1}/{d1} + {n2}/{d2} = ? (arrondi à 0.01)",
+                    "answer": answer, "explanation": f"La réponse est {answer}",
+                    "hint": "Trouve le dénominateur commun"}
+        elif exo_type == "pourcentage":
+            total = random.randint(20, 200)
+            percent = random.choice([10, 25, 50])
+            result = total * percent / 100
+
+            return {"question": f"Calcule {percent}% de {total}",
+                    "answer": float(result),
+                    "explanation": f"{percent}% de {total} = {result}",
+                    "hint": "Multiplie puis divise par 100"}
+        elif exo_type == "conversion horaire" :
+            minutes = random.randint(60, 500)
+            h = minutes // 60
+            m = minutes % 60
+
+            return {"question": f"Convertis {minutes} minutes en heures et minutes",
+                    "answer": (h, m),
+                    "explanation": f"{minutes} min = {h}h {m}min",
+                    "hint": "1h = 60 min"} 
     else:
         base = random.randint(2, 10)
         exp = random.randint(2, 3)
@@ -63,14 +103,7 @@ def generate_calcul_5eme(difficulty: int) -> dict:
 #             pourcentages, racines carrées, priorités
 # =========================================================
 
-def generate_calcul_4eme(difficulty: int) -> dict:
 
-    if difficulty == 1:
-        # Nombres relatifs — addition/soustraction simples
-        a = _choix_signe(random.randint(1, 45))
-        b = _choix_signe(random.randint(11, 45))
-        op = random.choice(['+', '-'])
-        import random
 
 def generate_calcul_4eme(difficulty: int) -> dict:
 
@@ -318,7 +351,24 @@ def generate_calcul_3eme(difficulty: int) -> dict:
 
 def generate_algebre_6eme(difficulty: int) -> dict:
     """Algèbre niveau 6ème — À personnaliser"""
-    if difficulty <= 2:
+    
+    if difficulty == 1:
+        values = [random.uniform(-1, 2) for _ in range(4)]
+        valid = [v for v in values if 0 <= v <= 1]
+
+        return {"question": f"Parmi ces nombres {values}, lesquels peuvent être une probabilité ?",
+                "answer": valid,
+                "explanation": "Une probabilité est entre 0 et 1",
+                "hint": "Intervalle [0 ; 1]"}
+    elif difficulty == 2:
+        total = random.randint(5, 20)
+        success = random.randint(1, total)
+
+        return {"question": f"Il y a {success} boules rouges sur {total}. Probabilité de tirer rouge ?",
+                "answer": float(success / total),
+                "explanation": f"{success}/{total}",
+                "hint": "Cas favorables / cas possibles"}
+    elif difficulty == 3:
         a = random.randint(2, 5)
         x = random.randint(1, 10)
         b = random.randint(1, 20)
@@ -327,7 +377,7 @@ def generate_algebre_6eme(difficulty: int) -> dict:
                 "answer": float(x),
                 "explanation": f"{a}x = {c - b}, donc x = {x}",
                 "hint": "Isole x d'un côté"}
-    elif difficulty <= 3:
+    elif difficulty == 4:
         a = random.randint(3, 7)
         c = random.randint(1, a - 1)
         x = random.randint(1, 8)
@@ -355,7 +405,6 @@ def generate_algebre_5eme(difficulty: int) -> dict:
 # =========================================================
 
 def generate_algebre_4eme(difficulty: int) -> dict:
-    import random
 
     if difficulty == 1:
         # Calcul littéral — réduction d'expressions simples
@@ -478,8 +527,143 @@ def generate_algebre_4eme(difficulty: int) -> dict:
             }
 
 def generate_algebre_3eme(difficulty: int) -> dict:
-    """Algèbre niveau 3ème — À personnaliser"""
-    return generate_algebre_6eme(difficulty)
+    """Algèbre niveau 3ème"""
+    # équation simple ax + b = c
+    if difficulty == 1:
+        a = random.randint(2, 8)
+        x = random.randint(1, 10)
+        b = random.randint(1, 20)
+        c = a * x + b
+
+        return {
+            "question": f"Résous: {a}x + {b} = {c}. x = ?",
+            "answer": float(x),
+            "explanation": f"{a}x = {c - b} donc x = {x}",
+            "hint": "Isole x"
+        }
+    
+    # équation ax + b = cx + d
+    elif difficulty == 2:
+        a = random.randint(3, 9)
+        c = random.randint(1, a - 1)
+        x = random.randint(1, 10)
+        b = random.randint(1, 15)
+        d = (a - c) * x + b
+
+        return {
+            "question": f"Résous: {a}x + {b} = {c}x + {d}. x = ?",
+            "answer": float(x),
+            "explanation": f"{a - c}x = {d - b} donc x = {x}",
+            "hint": "Regroupe les x d'un côté" 
+        }
+    
+    # équation avec fractions
+    elif difficulty == 3:
+        x = random.randint(1, 10)
+        d = random.randint(2, 5)
+        b = random.randint(1, 10)
+
+        c = (x / d) + b
+        c = round(c, 2)
+
+        return {
+            "question": f"Résous: x/{d} + {b} = {c}. x = ? (arrondi 0.01)",
+            "answer": float(x),
+            "explanation": f"x/{d} = {c - b} donc x = {x}",
+            "hint": "Multiplie par le dénominateur"
+        }
+    
+    # produit nul
+    elif difficulty == 4:
+        exo_type = random.choice(['produit', 'inequation'])
+
+        if exo_type == 'produit':
+        
+            x1 = random.randint(1, 10)
+            x2 = random.randint(1, 10)
+
+            return {
+                "question": f"Résous: (x - {x1})(x - {x2}) = 0. Donne UNE solution.",
+                "answer": float(x1),
+                "explanation": f"Produit nul ⇒ x = {x1} ou x = {x2}",
+                "hint": "Un produit est nul si un facteur est nul"
+            }
+            
+        else:
+            a = random.randint(2, 6)
+            x = random.randint(1, 10)
+            b = random.randint(1, 10)
+            c = a * x + b
+
+            return {
+                "question": f"Résous: {a}x + {b} > {c}. x > ?",
+                "answer": float(x),
+                "explanation": f"x > {x}",
+                "hint": "Comme une équation"
+            }
+    
+    # Niveau 5
+    else:
+        exo_type = random.choice(['developpement', 'identite', 'factorisation'])
+
+        # Développement simple
+        if exo_type == 'developpement':
+            a = random.randint(2, 5)
+            b = random.randint(1, 10)
+
+            correct = f"{a}x + {a*b}"
+            wrong1 = f"{a}x + {b}"
+            wrong2 = f"{a*b}x"
+            
+            choices = [correct, wrong1, wrong2]
+            random.shuffle(choices)
+
+            return {
+                "question": f"Développe: {a}(x + {b})",
+                "choices": choices,
+                "answer": correct,
+                "explanation": correct,
+                "hint": "Distribue le {a}"
+            }
+        
+        # Identité remarquable
+        elif exo_type == 'identite':
+            a = random.randint(1, 9)
+
+            correct = f"x² + {2*a}x + {a*a}"
+            wrong1 = f"x² + {a}x + {a*a}"
+            wrong2 = f"x² + {2*a}x"
+            
+            choices = [correct, wrong1, wrong2]
+            random.shuffle(choices)
+
+            return {
+                "question": f"Développe: (x + {a})²",
+                "choices": choices,
+                "answer": correct,
+                "explanation": correct,
+                "hint": "(a+b)² = a² + 2ab + b²"
+            }
+        
+        # Factorisation
+        else:
+            a = random.randint(2, 6)
+            b = random.randint(1, 10)
+
+            correct = f"{a}(x + {b})"
+            wrong1 = f"{a}x + {b}"
+            wrong2 = f"{a}(x + {a*b})"
+            
+            choices = [correct, wrong1, wrong2]
+            random.shuffle(choices)
+
+            return {
+                "question": f"Factorise: {a}x + {a*b}",
+                "choices": choices,
+                "answer": correct,
+                "explanation": correct,
+                "hint": "Cherche le facteur commun"
+            }
 
 
 # ================================================================
@@ -488,7 +672,7 @@ def generate_algebre_3eme(difficulty: int) -> dict:
 
 def generate_geometrie_6eme(difficulty: int) -> dict:
     """Géométrie niveau 6ème — À personnaliser"""
-    if difficulty <= 2:
+    if difficulty == 1:
         l, w = random.randint(3, 12), random.randint(2, 8)
         if random.choice([True, False]):
             return {"question": f"Aire d'un rectangle {l}cm × {w}cm (en cm²)?",
@@ -500,7 +684,7 @@ def generate_geometrie_6eme(difficulty: int) -> dict:
                     "answer": float(2 * (l + w)),
                     "explanation": f"Périmètre = 2×({l}+{w}) = {2*(l+w)} cm",
                     "hint": "Périmètre = 2×(L+l)"}
-    elif difficulty <= 3:
+    elif difficulty == 2:
         r = random.randint(2, 10)
         if random.choice([True, False]):
             answer = round(3.14 * r * r, 2)
@@ -514,7 +698,7 @@ def generate_geometrie_6eme(difficulty: int) -> dict:
                     "answer": answer,
                     "explanation": f"Périmètre = 2×π×r = {answer} cm",
                     "hint": "Périmètre = 2 × π × r"}
-    elif difficulty <= 4:
+    elif difficulty == 3:
         base = random.randint(4, 15)
         height = random.randint(3, 12)
         answer = (base * height) / 2
@@ -522,6 +706,15 @@ def generate_geometrie_6eme(difficulty: int) -> dict:
                 "answer": answer,
                 "explanation": f"Aire = ({base}×{height})/2 = {answer} cm²",
                 "hint": "Aire = (base × hauteur) / 2"}
+    elif difficulty == 4:
+        a = random.randint(20, 100)
+        b = random.randint(20, 100)
+        c = 180 - a - b
+
+        return {"question": f"Triangle : angles {a}° et {b}°. Quel est le troisième angle ?",
+                "answer": float(c),
+                "explanation": f"180 - {a} - {b} = {c}",
+                "hint": "Somme = 180°"}
     else:
         a, b = random.randint(3, 8), random.randint(4, 10)
         c = round(math.sqrt(a * a + b * b), 2)
@@ -711,8 +904,75 @@ def generate_geometrie_4eme(difficulty: int) -> dict:
             }
 
 def generate_geometrie_3eme(difficulty: int) -> dict:
-    """Géométrie niveau 3ème — À personnaliser"""
-    return generate_geometrie_6eme(difficulty)
+    """Géométrie niveau 3ème"""
+    # Pythagore (classique)
+    if difficulty == 1:
+        a = random.randint(3, 10)
+        b = random.randint(4, 12)
+        c = round(math.sqrt(a**2 + b**2), 2)
+
+        return {
+            "question": f"Triangle rectangle avec côtés {a} cm et {b} cm. Calcule l'hypoténuse (arrondi 0.01).",
+            "answer": c,
+            "explanation": f"c = √({a}² + {b}²) = √{a*a + b*b} ≈ {c}",
+            "hint": "Théorème de Pythagore: c² = a² + b²"
+        }
+    
+    # Réciproque de Pythagore
+    elif difficulty == 2:
+        a = random.randint(3, 10)
+        b = random.randint(4, 12)
+        c = int(math.sqrt(a**2 + b**2))
+
+        return {
+            "question": f"Un triangle a pour côtés {a}, {b} et {c}. Est-il rectangle ? (réponds par 1 pour oui, 0 pour non)",
+            "answer": 1.0,
+            "explanation": f"{a}² + {b}² = {a*a + b*b} et {c}² = {c*c} donc égalité → triangle rectangle",
+            "hint": "Vérifie si a² + b² = c²"
+        }
+    
+    # Trigonométrie
+    elif difficulty == 3:
+        adjacent = random.randint(3, 10)
+        hypotenuse = random.randint(adjacent + 1, 15)
+
+        cos_value = round(adjacent / hypotenuse, 2)
+
+        return {
+            "question": f"Dans un triangle rectangle, côté adjacent = {adjacent} cm et hypoténuse = {hypotenuse} cm. Calcule cos(angle) (arrondi 0.01).",
+            "answer": cos_value,
+            "explanation": f"cos = adjacent / hypoténuse = {adjacent}/{hypotenuse} ≈ {cos_value}",
+            "hint": "cos = adjacent / hypoténuse"
+        }
+    
+    # Thalès
+    elif difficulty == 4:
+        AB = random.randint(4, 10)
+        AC = random.randint(6, 15)
+        AD = random.randint(2, AB - 1)
+
+        AE = round((AD * AC) / AB, 2)
+
+        return {
+            "question": f"Dans une configuration de Thalès: AB={AB}, AC={AC}, AD={AD}. Calcule AE (arrondi 0.01).",
+            "answer": AE,
+            "explanation": f"AE = (AD × AC) / AB = ({AD} × {AC}) / {AB} ≈ {AE}",
+            "hint": "Utilise le théorème de Thalès"
+        }
+    
+    # Distance dans un repère
+    else:
+        x1, y1 = random.randint(-5, 5), random.randint(-5, 5)
+        x2, y2 = random.randint(-5, 5), random.randint(-5, 5)
+
+        distance = round(math.sqrt((x2 - x1)**2 + (y2 - y1)**2), 2)
+
+        return {
+            "question": f"Calcule la distance entre A({x1},{y1}) et B({x2},{y2}) (arrondi 0.01).",
+            "answer": distance,
+            "explanation": f"d = √(({x2}-{x1})² + ({y2}-{y1})²) ≈ {distance}",
+            "hint": "Utilise la formule de distance"
+        }
 
 
 # ================================================================
