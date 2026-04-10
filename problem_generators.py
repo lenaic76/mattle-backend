@@ -109,9 +109,9 @@ def generate_calcul_4eme(difficulty: int) -> dict:
 
     if difficulty == 1:
         # Nombres relatifs — addition/soustraction avec 2 opérations
-        a = _choix_signe(random.randint(10, 49))
-        b = _choix_signe(random.randint(-15, 15))
-        c = _choix_signe(random.randint(-25, 25))
+        a = choix_signe(random.randint(10, 49))
+        b = choix_signe(random.randint(-15, 15))
+        c = choix_signe(random.randint(-25, 25))
 
         op1, op2 = random.choice([('+', '+'), ('+', '-'), ('-', '+'), ('-', '-')])
 
@@ -145,7 +145,7 @@ def generate_calcul_4eme(difficulty: int) -> dict:
             b = random.randint(1, den - 1)
             op = random.choice(['+', '-'])
             num_res = a + b if op == '+' else a - b
-            n, d = _simplifier(num_res, den)
+            n, d = simplifier(num_res, den)
             return {
                 "question": f"Calculer : {a}/{den} {op} {b}/{den} (donner le résultat simplifié sous forme a/b ou entier)",
                 "answer": round(num_res / den, 4),
@@ -246,7 +246,7 @@ def generate_calcul_4eme(difficulty: int) -> dict:
             val = c * mult * mult
             return {
                 "question": f"Calculer : √{val}",
-                "answer": float(_math.sqrt(val)),
+                "answer": float(math.sqrt(val)),
                 "hint": f"√{val} = √({c} × {mult}²) = √{c} × {mult}",
                 "explanation": f"√{val} = {int(_math.sqrt(val))}"
             }
@@ -425,7 +425,7 @@ def generate_algebre_4eme(difficulty: int) -> dict:
         # Développement simple k(ax + b)
         k = random.randint(2, 8)
         a = random.randint(1, 9)
-        b = _choix_signe(random.randint(1, 9))
+        b = choix_signe(random.randint(1, 9))
         ka = k * a
         kb = k * b
         return {
@@ -439,7 +439,7 @@ def generate_algebre_4eme(difficulty: int) -> dict:
         # Équations du premier degré
         x_val = random.randint(-8, 8)
         a = random.randint(2, 8)
-        b = _choix_signe(random.randint(1, 15))
+        b = choix_signe(random.randint(1, 15))
         c = a * x_val + b
         return {
             "question": f"Résoudre : {a}x + ({b}) = {c}  → x = ?",
@@ -734,7 +734,6 @@ def generate_geometrie_5eme(difficulty: int) -> dict:
 # =========================================================
 
 def generate_geometrie_4eme(difficulty: int) -> dict:
-    import random, math
 
     if difficulty == 1:
         # Aires et périmètres simples

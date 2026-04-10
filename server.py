@@ -28,7 +28,7 @@ from clan_war import (
     try_matchmaking, start_player_battle,
     submit_war_answer, end_war, send_war, broadcast_war
 )
-from problem_generators import get_problem_data
+from problem_generators import get_problem_data   # <-- Unique générateur
 from friend_duel import (
     active_friend_duels, friend_duel_connections,
     create_friend_duel, submit_friend_answer, send_friend_duel
@@ -74,7 +74,7 @@ class UserResponse(BaseModel):
     username: str
     email: str
     coins: int
-    elo_online: int
+    elo_online: int          # Uniquement pour les duels
     grade: int
     role: str
     problems_solved: int
@@ -105,7 +105,6 @@ class AnswerResponse(BaseModel):
 class LeaderboardEntry(BaseModel):
     rank: int
     username: str
-    elo: int
     elo_online: int
     problems_solved: int
     accuracy: float
@@ -114,7 +113,6 @@ class UserStats(BaseModel):
     total_problems: int
     correct_answers: int
     accuracy: float
-    elo_history: List[dict]
     category_stats: dict
     streak_days: int
     best_streak: int
@@ -151,12 +149,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except JWTError:
         raise HTTPException(status_code=401, detail="Token invalide")
 
-def calculate_elo_change(user_elo: int, problem_elo: int, correct: bool) -> int:
-    K = 32
-    expected = 1 / (1 + 10 ** ((problem_elo - user_elo) / 400))
-    actual = 1 if correct else 0
-    return int(K * (actual - expected))
-
 def get_today_date() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
 
@@ -165,110 +157,58 @@ def clean_doc(doc: dict) -> dict:
         doc.pop("_id", None)
     return doc
 
-# ==================== GENERATEURS ====================
+# ==================== DIFFICULTÉ BASÉE SUR LE GRADE ====================
 
-def generate_calcul_problem(difficulty: int) -> dict:
-    if difficulty == 1:
-        a, b = random.randint(1, 20), random.randint(1, 20)
-        op = random.choice(['+', '-'])
-        if op == '+':
-            return {"question": f"{a} + {b} = ?", "answer": float(a + b),
-                    "explanation": f"La réponse est {a + b}", "hint": "Calcule étape par étape"}
-        else:
-            if a < b: a, b = b, a
-            return {"question": f"{a} - {b} = ?", "answer": float(a - b),
-                    "explanation": f"La réponse est {a - b}", "hint": "Calcule étape par étape"}
-    elif difficulty == 2:
-        a, b = random.randint(2, 12), random.randint(2, 12)
-        return {"question": f"{a} × {b} = ?", "answer": float(a * b),
-                "explanation": f"La réponse est {a * b}", "hint": "Table de multiplication"}
-    elif difficulty == 3:
-        a = random.randint(2, 12)
-        b = random.randint(2, 10)
-        return {"question": f"{a * b} ÷ {a} = ?", "answer": float(b),
-                "explanation": f"La réponse est {b}", "hint": "Division"}
-    elif difficulty == 4:
-        n1, d1 = random.randint(1, 5), random.randint(2, 6)
-        n2, d2 = random.randint(1, 5), random.randint(2, 6)
-        answer = round((n1/d1) + (n2/d2), 2)
-        return {"question": f"{n1}/{d1} + {n2}/{d2} = ? (arrondi à 0.01)",
-                "answer": answer, "explanation": f"La réponse est {answer}",
-                "hint": "Trouve le dénominateur commun"}
-    else:
-        base = random.randint(2, 10)
-        exp = random.randint(2, 3)
-        return {"question": f"{base}^{exp} = ?", "answer": float(base ** exp),
-                "explanation": f"{base}^{exp} = {base ** exp}", "hint": "Multiplication répétée"}
+def get_difficulties_for_grade(grade: int, count: int) -> List[int]:
+    """
+    Retourne une liste de difficultés (1 à 5) adaptées au niveau scolaire.
+    Aucune dépendance à l'ELO.
+    """
+    if grade <= 6:
+        pool = [1, 1, 2, 2, 2]
+    elif grade == 7:
+        pool = [1, 2, 2, 3, 3]
+    elif grade == 8:
+        pool = [2, 2, 3, 3, 4]
+    else:  # grade >= 9
+        pool = [2, 3, 4, 4, 5]
 
-def generate_algebre_problem(difficulty: int) -> dict:
-    if difficulty <= 2:
-        a = random.randint(2, 5)
-        x = random.randint(1, 10)
-        b = random.randint(1, 20)
-        c = a * x + b
-        return {"question": f"Résous: {a}x + {b} = {c}. x = ?",
-                "answer": float(x),
-                "explanation": f"{a}x = {c - b}, donc x = {x}",
-                "hint": "Isole x d'un côté"}
-    elif difficulty <= 3:
-        a = random.randint(3, 7)
-        c = random.randint(1, a - 1)
-        x = random.randint(1, 8)
-        b = random.randint(1, 15)
-        d = (a - c) * x + b
-        return {"question": f"Résous: {a}x + {b} = {c}x + {d}. x = ?",
-                "answer": float(x),
-                "explanation": f"{a - c}x = {d - b}, donc x = {x}",
-                "hint": "Regroupe les x d'un côté"}
-    else:
-        x = random.randint(2, 6)
-        return {"question": f"Résous: x² = {x * x}. x = ? (valeur positive)",
-                "answer": float(x),
-                "explanation": f"x = √{x * x} = {x}",
-                "hint": "Racine carrée"}
+    difficulties = []
+    for i in range(count):
+        difficulties.append(pool[i % len(pool)])
+    return difficulties
 
-def generate_geometrie_problem(difficulty: int) -> dict:
-    if difficulty <= 2:
-        l, w = random.randint(3, 12), random.randint(2, 8)
-        if random.choice([True, False]):
-            return {"question": f"Aire d'un rectangle {l}cm × {w}cm (en cm²)?",
-                    "answer": float(l * w),
-                    "explanation": f"Aire = {l} × {w} = {l * w} cm²",
-                    "hint": "Aire = longueur × largeur"}
-        else:
-            return {"question": f"Périmètre d'un rectangle {l}cm × {w}cm (en cm)?",
-                    "answer": float(2 * (l + w)),
-                    "explanation": f"Périmètre = 2×({l}+{w}) = {2*(l+w)} cm",
-                    "hint": "Périmètre = 2×(L+l)"}
-    elif difficulty <= 3:
-        r = random.randint(2, 10)
-        if random.choice([True, False]):
-            answer = round(3.14 * r * r, 2)
-            return {"question": f"Aire d'un cercle de rayon {r}cm (π≈3.14, arrondi 0.01)?",
-                    "answer": answer,
-                    "explanation": f"Aire = π×r² = 3.14×{r}² = {answer} cm²",
-                    "hint": "Aire = π × r²"}
-        else:
-            answer = round(2 * 3.14 * r, 2)
-            return {"question": f"Périmètre d'un cercle de rayon {r}cm (π≈3.14, arrondi 0.01)?",
-                    "answer": answer,
-                    "explanation": f"Périmètre = 2×π×r = {answer} cm",
-                    "hint": "Périmètre = 2 × π × r"}
-    elif difficulty <= 4:
-        base = random.randint(4, 15)
-        height = random.randint(3, 12)
-        answer = (base * height) / 2
-        return {"question": f"Aire d'un triangle base={base}cm hauteur={height}cm (en cm²)?",
-                "answer": answer,
-                "explanation": f"Aire = ({base}×{height})/2 = {answer} cm²",
-                "hint": "Aire = (base × hauteur) / 2"}
-    else:
-        a, b = random.randint(3, 8), random.randint(4, 10)
-        c = round(math.sqrt(a * a + b * b), 2)
-        return {"question": f"Triangle rectangle avec côtés {a}cm et {b}cm. Hypoténuse? (arrondi 0.01)",
-                "answer": c,
-                "explanation": f"c = √({a}²+{b}²) = √{a*a+b*b} ≈ {c} cm",
-                "hint": "Théorème de Pythagore: c² = a² + b²"}
+# ==================== GÉNÉRATION DE PROBLÈME (UNIQUE) ====================
+
+def generate_problem_safe(category: str, difficulty: int, grade: int) -> dict:
+    """
+    Wrapper autour de get_problem_data avec fallback en cas d'erreur.
+    """
+    try:
+        data = get_problem_data(category, difficulty, grade)
+        return {
+            "id": str(uuid.uuid4()),
+            "category": category,
+            "difficulty": difficulty,
+            "question": data["question"],
+            "answer": data["answer"],
+            "hint": data.get("hint", ""),
+            "explanation": data["explanation"],
+        }
+    except Exception as e:
+        logger.error(f"Erreur génération problème: {e}")
+        # Fallback : problème simple de calcul
+        return {
+            "id": str(uuid.uuid4()),
+            "category": "calcul",
+            "difficulty": 1,
+            "question": "1 + 1 = ?",
+            "answer": 2.0,
+            "hint": "Addition simple",
+            "explanation": "1 + 1 = 2",
+        }
+
+# ==================== ÉNIGMES QUOTIDIENNES ====================
 
 DAILY_RIDDLES = [
     {"question": "Je suis un nombre à deux chiffres. La somme de mes chiffres est 10. Si on inverse mes chiffres, on obtient un nombre plus grand de 36. Quel nombre suis-je?",
@@ -293,22 +233,7 @@ def get_daily_riddle(date_str: str) -> dict:
     date_hash = int(hashlib.md5(date_str.encode()).hexdigest(), 16)
     riddle = DAILY_RIDDLES[date_hash % len(DAILY_RIDDLES)].copy()
     riddle["id"] = f"riddle_{date_str}"
-    riddle["elo_value"] = 1500
     return riddle
-
-def generate_problem(category: str, difficulty: int, grade: int = 6) -> dict:
-    """Génère un problème adapté à la catégorie, la difficulté ET le niveau scolaire"""
-    data = get_problem_data(category, difficulty, grade)
-    return {
-        "id": str(uuid.uuid4()),
-        "category": category,
-        "difficulty": difficulty,
-        "question": data["question"],
-        "answer": data["answer"],
-        "hint": data.get("hint"),
-        "explanation": data["explanation"],
-        "elo_value": 800 + (difficulty * 200),
-    }
 
 # ==================== AUTH ====================
 
@@ -319,14 +244,13 @@ async def register(user_data: UserCreate):
     if await db.users.find_one({"username": user_data.username}):
         raise HTTPException(status_code=400, detail="Nom d'utilisateur déjà pris")
     user_id = str(uuid.uuid4())
-    today = get_today_date()
     user = {
         "id": user_id,
         "username": user_data.username,
         "email": user_data.email,
         "password_hash": hash_password(user_data.password),
         "coins": 0,
-        "elo_online": 1000,
+        "elo_online": 1000,            # ELO uniquement pour les duels
         "grade": user_data.grade,
         "role": user_data.role,
         "problems_solved": 0,
@@ -334,7 +258,6 @@ async def register(user_data: UserCreate):
         "streak_days": 0,
         "best_streak": 0,
         "last_daily_date": None,
-        "elo_history": [{"date": today, "elo": 1000}],
         "category_stats": {
             "calcul": {"solved": 0, "correct": 0},
             "algebre": {"solved": 0, "correct": 0},
@@ -409,7 +332,6 @@ async def update_profile(
         if existing:
             raise HTTPException(status_code=400, detail="Ce pseudo est déjà pris")
         update["username"] = username
-        # Met à jour le pseudo dans le clan aussi
         if current_user.get("clan_id"):
             await db.clans.update_one(
                 {"id": current_user["clan_id"], "members.id": current_user["id"]},
@@ -425,7 +347,7 @@ async def update_profile(
     await db.users.update_one({"id": current_user["id"]}, {"$set": update})
     return {"message": "Profil mis à jour"}
 
-# ==================== PROBLEMS ====================
+# ==================== PROBLÈMES (ENTRAÎNEMENT SOLO) ====================
 
 @api_router.get("/problems/generate")
 async def generate_problems(
@@ -433,21 +355,16 @@ async def generate_problems(
     count: int = 5,
     current_user: dict = Depends(get_current_user)
 ):
-    user_elo = current_user["elo"]
-    if user_elo < 900:
-        difficulties = [1, 1, 2, 2, 2]
-    elif user_elo < 1100:
-        difficulties = [1, 2, 2, 3, 3]
-    elif user_elo < 1300:
-        difficulties = [2, 2, 3, 3, 4]
-    elif user_elo < 1500:
-        difficulties = [2, 3, 3, 4, 4]
-    else:
-        difficulties = [3, 3, 4, 4, 5]
+    """
+    Génère des problèmes basés sur le grade de l'utilisateur (plus d'ELO).
+    """
+    grade = current_user.get("grade", 6)
+    difficulties = get_difficulties_for_grade(grade, min(count, 10))
+
     problems = []
-    for i in range(min(count, 10)):
-        diff = difficulties[i % len(difficulties)]
-        problems.append(generate_problem(category, diff, current_user.get("grade", 6)))
+    for diff in difficulties:
+        prob = generate_problem_safe(category, diff, grade)
+        problems.append(prob)
     return {"problems": problems}
 
 @api_router.post("/problems/cache")
@@ -464,30 +381,28 @@ async def submit_answer(
     submission: AnswerSubmit,
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Soumet une réponse pour un problème d'entraînement.
+    Récompense : 2 pièces par niveau de difficulté si correct.
+    """
     problem = await db.problems_cache.find_one({"id": submission.problem_id})
     if not problem:
         raise HTTPException(status_code=404, detail="Problème non trouvé")
-    is_correct = abs(submission.answer - problem["answer"]) < 0.1
-    elo_change = calculate_elo_change(current_user["elo"], problem["elo_value"], is_correct)
-    new_elo = max(100, current_user["elo"] + elo_change)
+
+    is_correct = abs(float(submission.answer) - float(problem["answer"])) < 0.1
     category = problem.get("category", "calcul")
+    difficulty = problem.get("difficulty", 1)
+
+    # Mise à jour des statistiques par catégorie
     cat_stats = current_user.get("category_stats", {})
     if category not in cat_stats:
         cat_stats[category] = {"solved": 0, "correct": 0}
     cat_stats[category]["solved"] += 1
     if is_correct:
         cat_stats[category]["correct"] += 1
-    today = get_today_date()
-    elo_history = current_user.get("elo_history", [])
-    if not elo_history or elo_history[-1]["date"] != today:
-        elo_history.append({"date": today, "elo": new_elo})
-    else:
-        elo_history[-1]["elo"] = new_elo
-    # Calcul des pièces gagnées (entraînement)
-    coins_earned = 0
-    if is_correct:
-        coins_earned = 2 * problem.get("difficulty", 1)
 
+    # Calcul des pièces
+    coins_earned = 2 * difficulty if is_correct else 0
     new_coins = current_user.get("coins", 0) + coins_earned
 
     update_data = {
@@ -497,16 +412,18 @@ async def submit_answer(
     }
     if is_correct:
         update_data["correct_answers"] = current_user["correct_answers"] + 1
-    await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
-    return {
-        "correct": is_correct,
-        "correct_answer": problem["answer"],
-        "explanation": problem.get("explanation", ""),
-        "coins_earned": coins_earned,
-        "new_coins": new_coins,
-    }
 
-# ==================== DAILY ====================
+    await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
+
+    return AnswerResponse(
+        correct=is_correct,
+        correct_answer=problem["answer"],
+        explanation=problem.get("explanation", ""),
+        coins_earned=coins_earned,
+        new_coins=new_coins,
+    )
+
+# ==================== DÉFI QUOTIDIEN ====================
 
 @api_router.get("/daily/challenge")
 async def get_daily_challenge(current_user: dict = Depends(get_current_user)):
@@ -516,16 +433,19 @@ async def get_daily_challenge(current_user: dict = Depends(get_current_user)):
     })
     completed_problems = user_daily.get("completed_problems", []) if user_daily else []
     riddle_completed = user_daily.get("riddle_completed", False) if user_daily else False
+
     daily_cache = await db.daily_challenges.find_one({"date": today})
     if not daily_cache:
         problems = []
         grade = current_user.get("grade", 6)
         for cat in ["calcul", "algebre", "geometrie"]:
             for diff in [2, 3, 4]:
-                problems.append(generate_problem(cat, diff, grade))
+                prob = generate_problem_safe(cat, diff, grade)
+                problems.append(prob)
         riddle = get_daily_riddle(today)
         daily_cache = {"date": today, "problems": problems, "riddle": riddle}
         await db.daily_challenges.insert_one(daily_cache)
+
     return {
         "date": today,
         "problems": daily_cache["problems"],
@@ -544,32 +464,42 @@ async def submit_daily_answer(
     daily = await db.daily_challenges.find_one({"date": today})
     if not daily:
         raise HTTPException(status_code=404, detail="Défi quotidien non trouvé")
+
     is_riddle = submission.problem_id.startswith("riddle_")
     problem = daily["riddle"] if is_riddle else next(
         (p for p in daily["problems"] if p["id"] == submission.problem_id), None
     )
     if not problem:
         raise HTTPException(status_code=404, detail="Problème non trouvé")
-    is_correct = abs(submission.answer - problem["answer"]) < 0.1
+
+    is_correct = abs(float(submission.answer) - float(problem["answer"])) < 0.1
+
     user_daily = await db.daily_completions.find_one({
         "user_id": current_user["id"], "date": today
     }) or {
         "user_id": current_user["id"], "date": today,
         "completed_problems": [], "riddle_completed": False,
     }
+
+    # Vérifier si déjà complété
     if is_riddle:
         if user_daily.get("riddle_completed"):
-            return {"correct": is_correct, "already_completed": True}
+            return AnswerResponse(
+                correct=is_correct, correct_answer=problem["answer"],
+                explanation=problem.get("explanation", ""),
+                coins_earned=0, new_coins=current_user.get("coins", 0)
+            )
         user_daily["riddle_completed"] = is_correct
     else:
         if submission.problem_id in user_daily["completed_problems"]:
-            return {"correct": is_correct, "already_completed": True}
+            return AnswerResponse(
+                correct=is_correct, correct_answer=problem["answer"],
+                explanation=problem.get("explanation", ""),
+                coins_earned=0, new_coins=current_user.get("coins", 0)
+            )
         user_daily["completed_problems"].append(submission.problem_id)
-    problem_elo = problem.get("elo_value", 1500)
-    elo_change = calculate_elo_change(current_user["elo"], problem_elo, is_correct)
-    if is_riddle and is_correct:
-        elo_change = int(elo_change * 1.5)
-    new_elo = max(100, current_user["elo"] + elo_change)
+
+    # Gestion du streak
     yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
     last_daily = current_user.get("last_daily_date")
     if last_daily == yesterday:
@@ -578,29 +508,25 @@ async def submit_daily_answer(
         new_streak = current_user.get("streak_days", 0)
     else:
         new_streak = 1
-    today_history = get_today_date()
-    elo_history = current_user.get("elo_history", [])
-    if not elo_history or elo_history[-1]["date"] != today_history:
-        elo_history.append({"date": today_history, "elo": new_elo})
-    else:
-        elo_history[-1]["elo"] = new_elo
-    # Calcul des pièces (défi quotidien = x3 vs entraînement)
+
+    # Calcul des pièces (défi quotidien : x3 par rapport à l'entraînement)
     coins_earned = 0
     if is_correct:
-        problem_difficulty = problem.get("difficulty", 1)
         if is_riddle:
-            coins_earned = 15  # Énigme = 15 pièces fixes
+            coins_earned = 15   # Énigme = 15 pièces
         else:
-            coins_earned = 3 * problem_difficulty
+            difficulty = problem.get("difficulty", 1)
+            coins_earned = 3 * difficulty   # Triple par rapport à l'entraînement
 
     # Bonus si tout le défi est complété
-    all_problems = daily_cache.get("problems", [])
+    all_problems = daily.get("problems", [])
     completed = user_daily.get("completed_problems", [])
     if len(completed) == len(all_problems) and user_daily.get("riddle_completed"):
-        coins_earned += 20  # Bonus complétion
+        coins_earned += 20
 
     new_coins = current_user.get("coins", 0) + coins_earned
 
+    # Mise à jour de l'utilisateur
     update_data = {
         "coins": new_coins,
         "last_daily_date": today,
@@ -610,19 +536,20 @@ async def submit_daily_answer(
     }
     if is_correct:
         update_data["correct_answers"] = current_user["correct_answers"] + 1
+
     await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
     await db.daily_completions.update_one(
         {"user_id": current_user["id"], "date": today},
         {"$set": user_daily}, upsert=True
     )
-    return {
-        "correct": is_correct,
-        "correct_answer": problem["answer"],
-        "explanation": problem.get("explanation", ""),
-        "coins_earned": coins_earned,
-        "new_coins": new_coins,
-        "streak": new_streak,
-    }
+
+    return AnswerResponse(
+        correct=is_correct,
+        correct_answer=problem["answer"],
+        explanation=problem.get("explanation", ""),
+        coins_earned=coins_earned,
+        new_coins=new_coins,
+    )
 
 # ==================== LEADERBOARD & STATS ====================
 
@@ -635,7 +562,6 @@ async def get_leaderboard(limit: int = 50):
             if user["problems_solved"] > 0 else 0
         leaderboard.append(LeaderboardEntry(
             rank=rank, username=user["username"],
-            elo=user["elo"],
             elo_online=user.get("elo_online", 1000),
             problems_solved=user["problems_solved"],
             accuracy=round(accuracy, 1),
@@ -651,7 +577,6 @@ async def get_my_stats(current_user: dict = Depends(get_current_user)):
             (current_user["correct_answers"] / current_user["problems_solved"] * 100)
             if current_user["problems_solved"] > 0 else 0, 1
         ),
-        elo_history=current_user.get("elo_history", []),
         category_stats=current_user.get("category_stats", {}),
         streak_days=current_user.get("streak_days", 0),
         best_streak=current_user.get("best_streak", 0),
@@ -757,14 +682,16 @@ async def create_exercise(
     class_doc = await db.classes.find_one({"id": class_id})
     if not class_doc or class_doc["teacher_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Accès non autorisé")
+
     exercise_type = exercise_data.get("type", "auto")
     questions = []
     if exercise_type == "auto":
         category = exercise_data.get("category", "calcul")
         difficulty = exercise_data.get("difficulty", 2)
         count = exercise_data.get("count", 10)
+        grade = class_doc.get("grade", 6)
         for _ in range(count):
-            prob = generate_problem(category, difficulty, class_doc.get("grade", 6))
+            prob = generate_problem_safe(category, difficulty, grade)
             questions.append({
                 "id": prob["id"], "question": prob["question"],
                 "answer": prob["answer"], "hint": prob.get("hint", ""),
@@ -782,6 +709,7 @@ async def create_exercise(
         for q in exercise_data.get("questions", []):
             q["id"] = str(uuid.uuid4())
             questions.append(q)
+
     exercise_id = str(uuid.uuid4())
     exercise = {
         "id": exercise_id, "class_id": class_id,
@@ -1816,6 +1744,8 @@ async def get_pending_duels(current_user: dict = Depends(get_current_user)):
             inv["created_at"] = inv["created_at"].isoformat()
         result.append(inv)
     return {"invites": result}
+
+# ==================== DÉMARRAGE ====================
 
 app.include_router(api_router)
 app.add_middleware(
